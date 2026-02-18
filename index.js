@@ -1,9 +1,3 @@
-import {
-  extension_settings,
-  getContext,
-  saveSettingsDebounced
-} from "../../../extensions.js";
-
 const EXTENSION_NAME = "tavernplug-handy";
 // Add new extension-level settings defaults here.
 const DEFAULTS = {
@@ -18,9 +12,28 @@ const DEFAULTS = {
   minimumAllowedStroke: 0
 };
 
-const settings = extension_settings[EXTENSION_NAME] ?? {};
+function getContextSafe() {
+  return globalThis.SillyTavern?.getContext?.() ?? null;
+}
+
+function getExtensionSettingsStore() {
+  const context = getContextSafe();
+  if (!context) return null;
+  if (!context.extensionSettings) context.extensionSettings = {};
+  return context.extensionSettings;
+}
+
+function saveSettings() {
+  const context = getContextSafe();
+  if (typeof context?.saveSettingsDebounced === "function") {
+    context.saveSettingsDebounced();
+  }
+}
+
+const extensionSettingsStore = getExtensionSettingsStore() ?? {};
+const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
-extension_settings[EXTENSION_NAME] = settings;
+extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
 let pollHandle = null;
@@ -65,7 +78,7 @@ async function postJson(path, payload) {
 }
 
 function getAssistantMessageFromContext() {
-  const context = getContext();
+  const context = getContextSafe();
   const chat = Array.isArray(context?.chat) ? context.chat : [];
   for (let i = chat.length - 1; i >= 0; i -= 1) {
     const message = chat[i];
@@ -115,7 +128,7 @@ function onInputChange(event) {
   if (!name || !Object.prototype.hasOwnProperty.call(settings, name)) return;
 
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
-  saveSettingsDebounced();
+  saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
 }
@@ -239,6 +252,11 @@ function startPolling() {
 }
 
 function init() {
+  if (!getContextSafe()) {
+    // eslint-disable-next-line no-console
+    console.error("[tavernplug-handy] SillyTavern context is unavailable");
+    return;
+  }
   ensurePanelMounted();
   startPolling();
   void syncConfig();
