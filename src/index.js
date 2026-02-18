@@ -290,3 +290,14 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 process.on("SIGINT", () => {
   server.close(() => process.exit(0));
 });
+
+process.on("uncaughtException", (error) => {
+  // Keep bridge alive if websocket layer throws outside request handlers.
+  // eslint-disable-next-line no-console
+  console.error("[fatal] uncaughtException:", error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  // eslint-disable-next-line no-console
+  console.error("[fatal] unhandledRejection:", reason);
+});
