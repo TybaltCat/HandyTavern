@@ -225,7 +225,7 @@ function renderSettingsPanel() {
   panel.className = "tavernplug-panel";
   panel.innerHTML = `
     <div class="tavernplug-header">
-      <h4>TavernPlug Handy Bridge</h4>
+      <h4>HandyTavern</h4>
       <button class="menu_button tavernplug-toggle" type="button">-</button>
     </div>
     <div class="tavernplug-body">

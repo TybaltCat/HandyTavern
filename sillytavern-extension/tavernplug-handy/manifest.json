@@ -1,7 +1,7 @@
 {
-  "display_name": "TavernPlug Handy Bridge",
-  "author": "TavernPlug",
-  "version": "0.2.0",
+  "display_name": "HandyTavern",
+  "author": "TybaltCat",
+  "version": "0.2.2",
   "loading_order": 20,
   "requires": [],
   "optional": [],
