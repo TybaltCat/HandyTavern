@@ -10,6 +10,28 @@
   margin: 0 0 10px;
 }
 
+.tavernplug-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.tavernplug-header h4 {
+  margin: 0;
+}
+
+.tavernplug-toggle {
+  width: 28px;
+  min-width: 28px;
+  padding: 0;
+  line-height: 26px;
+}
+
+.tavernplug-collapsed .tavernplug-body {
+  display: none;
+}
+
 .tavernplug-row {
   display: grid;
   gap: 6px;

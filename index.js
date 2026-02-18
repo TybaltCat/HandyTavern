@@ -5,10 +5,11 @@ const DEFAULTS = {
   autoSend: true,
   strictTagOnly: true,
   stopPreviousOnNewMotion: true,
+  panelCollapsed: false,
   handyConnectionKey: "",
-  strokeRange: 1,
+  strokeRange: 100,
   speedMin: 0,
-  speedMax: 1,
+  speedMax: 100,
   minimumAllowedStroke: 0
 };
 
@@ -33,6 +34,10 @@ function saveSettings() {
 const extensionSettingsStore = getExtensionSettingsStore() ?? {};
 const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
+normalizePercentSetting("strokeRange");
+normalizePercentSetting("speedMin");
+normalizePercentSetting("speedMax");
+normalizePercentSetting("minimumAllowedStroke");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -40,10 +45,19 @@ let pollHandle = null;
 let statusEl = null;
 let panelRetryHandle = null;
 
-function clamp01(value) {
+function clampPercent(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return 0;
-  return Math.max(0, Math.min(1, num));
+  return Math.max(0, Math.min(100, num));
+}
+
+function normalizePercentSetting(name) {
+  const raw = Number(settings[name]);
+  if (!Number.isFinite(raw)) return;
+  // Migrate older 0..1 settings to 0..100 display values.
+  if (raw >= 0 && raw <= 1) {
+    settings[name] = raw * 100;
+  }
 }
 
 function setStatus(message) {
@@ -94,10 +108,10 @@ async function syncConfig() {
   // Keep this payload aligned with POST /config in src/index.js.
   const payload = {
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
-    strokeRange: clamp01(settings.strokeRange),
-    speedMin: clamp01(settings.speedMin),
-    speedMax: clamp01(settings.speedMax),
-    minimumAllowedStroke: clamp01(settings.minimumAllowedStroke),
+    strokeRange: clampPercent(settings.strokeRange) / 100,
+    speedMin: clampPercent(settings.speedMin) / 100,
+    speedMax: clampPercent(settings.speedMax) / 100,
+    minimumAllowedStroke: clampPercent(settings.minimumAllowedStroke) / 100,
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
   };
 
@@ -105,7 +119,7 @@ async function syncConfig() {
     await postJson("/config", payload);
     setStatus("Config synced");
   } catch (error) {
-    setStatus(`Config error: ${error.message}`);
+    setStatus(`Config error: ${error.message}. Is bridge running on ${settings.bridgeUrl}?`);
   }
 }
 
@@ -128,6 +142,12 @@ function onInputChange(event) {
   if (!name || !Object.prototype.hasOwnProperty.call(settings, name)) return;
 
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
+  if (
+    type === "number" &&
+    ["strokeRange", "speedMin", "speedMax", "minimumAllowedStroke"].includes(name)
+  ) {
+    settings[name] = clampPercent(settings[name]);
+  }
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
@@ -153,6 +173,14 @@ async function handleTestMotion() {
   }
 }
 
+function setPanelCollapsed(panel, collapsed) {
+  settings.panelCollapsed = Boolean(collapsed);
+  panel.classList.toggle("tavernplug-collapsed", settings.panelCollapsed);
+  const toggle = panel.querySelector(".tavernplug-toggle");
+  if (toggle) toggle.textContent = settings.panelCollapsed ? "+" : "-";
+  saveSettings();
+}
+
 function renderSettingsPanel() {
   const container = findSettingsContainer();
   if (!container || document.querySelector(`#${EXTENSION_NAME}-panel`)) return;
@@ -161,7 +189,11 @@ function renderSettingsPanel() {
   panel.id = `${EXTENSION_NAME}-panel`;
   panel.className = "tavernplug-panel";
   panel.innerHTML = `
-    <h4>TavernPlug Handy Bridge</h4>
+    <div class="tavernplug-header">
+      <h4>TavernPlug Handy Bridge</h4>
+      <button class="menu_button tavernplug-toggle" type="button">-</button>
+    </div>
+    <div class="tavernplug-body">
     <div class="tavernplug-row">
       <label>Bridge URL</label>
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
@@ -171,20 +203,20 @@ function renderSettingsPanel() {
       <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
     </div>
     <div class="tavernplug-row">
-      <label>Stroke Range (0-1)</label>
-      <input type="number" step="0.01" min="0" max="1" name="strokeRange" value="${settings.strokeRange}" />
+      <label>Stroke Range (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
     </div>
     <div class="tavernplug-row">
-      <label>Minimum Allowed Stroke (0-1)</label>
-      <input type="number" step="0.01" min="0" max="1" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
+      <label>Minimum Allowed Stroke (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
     </div>
     <div class="tavernplug-row">
-      <label>Speed Range Min (0-1)</label>
-      <input type="number" step="0.01" min="0" max="1" name="speedMin" value="${settings.speedMin}" />
+      <label>Speed Range Min (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="speedMin" value="${settings.speedMin}" />
     </div>
     <div class="tavernplug-row">
-      <label>Speed Range Max (0-1)</label>
-      <input type="number" step="0.01" min="0" max="1" name="speedMax" value="${settings.speedMax}" />
+      <label>Speed Range Max (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
     </div>
     <div class="tavernplug-row">
       <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
@@ -206,6 +238,7 @@ function renderSettingsPanel() {
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-status">Idle</div>
+    </div>
   `;
 
   panel.querySelectorAll("input").forEach((input) => {
@@ -217,6 +250,10 @@ function renderSettingsPanel() {
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();
   });
+  panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
+    setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
+  });
+  setPanelCollapsed(panel, settings.panelCollapsed);
 
   container.append(panel);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
