@@ -1,0 +1,171 @@
+import {
+  ButtplugClient,
+  ButtplugNodeWebsocketClientConnector
+} from "buttplug";
+
+// Tune how much each parsed depth scales intensity.
+const DEPTH_INTENSITY_MULTIPLIER = {
+  tip: 0.75,
+  middle: 0.9,
+  full: 1.0,
+  deep: 1.1
+};
+
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function depthToNormalizedStroke(depth) {
+  // Tune depth-to-stroke mapping here (0 = shallow, 1 = deepest position).
+  if (depth === "tip") return 0.15;
+  if (depth === "middle") return 0.5;
+  if (depth === "full") return 0.85;
+  return 1.0;
+}
+
+function remapSpeed(speed, speedMin, speedMax) {
+  const min = clamp01(speedMin);
+  const max = clamp01(speedMax);
+  if (max <= min) return clamp01(speed);
+  return clamp01(min + speed * (max - min));
+}
+
+function computeStrokePosition(depth, motionConfig) {
+  const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+  const strokeRange = clamp01(motionConfig.strokeRange ?? 1);
+  return clamp01(minStroke + depthToNormalizedStroke(depth) * strokeRange);
+}
+
+async function runLinearIfSupported(device, durationMs, position) {
+  if (typeof device.linear !== "function") return false;
+
+  // Known payload shapes across buttplug client/device variants.
+  const attempts = [
+    async () => device.linear(durationMs, position),
+    async () => device.linear([{ duration: durationMs, position }]),
+    async () => device.linear([{ Duration: durationMs, Position: position, Index: 0 }])
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      await attempt();
+      return true;
+    } catch (_error) {
+      // Try next known payload shape.
+    }
+  }
+
+  return false;
+}
+
+export class HandyController {
+  constructor(options = {}) {
+    this.serverUrl = options.serverUrl ?? "ws://127.0.0.1:12345";
+    this.deviceNameFilter = options.deviceNameFilter?.toLowerCase() ?? "handy";
+    this.clientName = options.clientName ?? "TavernPlug";
+    this.client = null;
+    this.device = null;
+    // Used to cancel older in-flight motions when preemption is enabled.
+    this.motionSequence = 0;
+  }
+
+  async connect() {
+    if (this.client) return;
+
+    this.client = new ButtplugClient(this.clientName);
+    const connector = new ButtplugNodeWebsocketClientConnector(this.serverUrl);
+    await this.client.connect(connector);
+
+    this.client.addListener("deviceadded", (device) => {
+      if (
+        !this.device &&
+        device.name.toLowerCase().includes(this.deviceNameFilter)
+      ) {
+        this.device = device;
+      }
+    });
+
+    await this.client.startScanning();
+  }
+
+  async ensureDevice(timeoutMs = 10000) {
+    if (this.device) return this.device;
+
+    const end = Date.now() + timeoutMs;
+    while (!this.device && Date.now() < end) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    if (!this.device) {
+      throw new Error(
+        `No matching device found. Looking for name containing "${this.deviceNameFilter}".`
+      );
+    }
+
+    return this.device;
+  }
+
+  async runMotion(motion, motionConfig = {}, options = {}) {
+    // Set false to allow overlaps; true preempts old motions on each new one.
+    const stopPreviousOnNewMotion = options.stopPreviousOnNewMotion ?? true;
+    const sequence = stopPreviousOnNewMotion ? ++this.motionSequence : this.motionSequence;
+    const device = await this.ensureDevice();
+    const depthMultiplier = DEPTH_INTENSITY_MULTIPLIER[motion.depth] ?? 1;
+    // User-tunable speed window. Incoming speed is remapped into this range.
+    const speedMin = motionConfig.speedMin ?? 0;
+    const speedMax = motionConfig.speedMax ?? 1;
+    const remapped = remapSpeed(motion.speed, speedMin, speedMax);
+    const scalar = clamp01(remapped * depthMultiplier);
+    // User-tunable stroke limits are applied inside computeStrokePosition().
+    const strokePosition = computeStrokePosition(motion.depth, motionConfig);
+
+    if (stopPreviousOnNewMotion) {
+      await this.stopNow();
+      if (sequence !== this.motionSequence) return;
+    }
+
+    await runLinearIfSupported(device, motion.durationMs, strokePosition);
+    if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
+
+    if (typeof device.scalar === "function") {
+      await device.scalar(scalar);
+    } else if (typeof device.vibrate === "function") {
+      await device.vibrate(scalar);
+    } else {
+      throw new Error("Device does not support scalar/vibrate commands.");
+    }
+
+    if (stopPreviousOnNewMotion) {
+      const end = Date.now() + motion.durationMs;
+      while (Date.now() < end) {
+        if (sequence !== this.motionSequence) return;
+        await sleep(Math.min(100, end - Date.now()));
+      }
+    } else {
+      await sleep(motion.durationMs);
+    }
+
+    await this.stopNow();
+  }
+
+  async stopNow(options = {}) {
+    if (options.cancelPending === true) {
+      this.motionSequence += 1;
+    }
+
+    if (!this.device) return;
+    const device = this.device;
+
+    if (typeof device.stop === "function") {
+      await device.stop();
+    } else if (typeof device.scalar === "function") {
+      await device.scalar(0);
+    } else if (typeof device.vibrate === "function") {
+      await device.vibrate(0);
+    }
+  }
+}

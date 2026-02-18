@@ -1,0 +1,43 @@
+.tavernplug-panel {
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 10px;
+  padding: 12px;
+  margin: 10px 0;
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 80%, transparent);
+}
+
+.tavernplug-panel h4 {
+  margin: 0 0 10px;
+}
+
+.tavernplug-row {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tavernplug-row label {
+  font-size: 0.9rem;
+}
+
+.tavernplug-row input[type="text"],
+.tavernplug-row input[type="number"] {
+  width: 100%;
+}
+
+.tavernplug-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.tavernplug-stop {
+  background: #b32020;
+  border-color: #b32020;
+  color: #fff;
+}
+
+.tavernplug-status {
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
