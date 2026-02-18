@@ -147,7 +147,8 @@ function applySafeModeToMotion(motion, config) {
 }
 
 async function ensureReady() {
-  if (ready || !enabled) return;
+  if (!enabled) return;
+  if (ready && controller.client?.connected === true) return;
   // eslint-disable-next-line no-console
   console.log("[device] connecting to buttplug server...");
   await controller.connect();
@@ -202,10 +203,17 @@ app.post("/motion", async (req, res) => {
   try {
     // Toggle strict tag requirements via STRICT_MOTION_TAG env.
     motion = parseMotion(text, { strictTag: strictMotionTag });
+    // eslint-disable-next-line no-console
+    console.log(
+      `[parse] style=${motion.style} depth=${motion.depth} speed=${motion.speed.toFixed(3)} durationMs=${motion.durationMs} text=${JSON.stringify(text)}`
+    );
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console
+    console.error(`[parse] error=${JSON.stringify(message)} text=${JSON.stringify(text)}`);
     return res.status(400).json({
       accepted: false,
-      error: error instanceof Error ? error.message : String(error)
+      error: message
     });
   }
 

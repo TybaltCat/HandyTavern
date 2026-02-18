@@ -43,11 +43,17 @@ function computeStrokePosition(depth, motionConfig) {
 async function runLinearIfSupported(device, durationMs, position) {
   if (typeof device.linear !== "function") return false;
 
+  const safeDurationMs = Math.max(1, Math.round(durationMs));
+  const safeDurationSec = Math.max(0.001, safeDurationMs / 1000);
+  const safePosition = clamp01(position);
+
   // Known payload shapes across buttplug client/device variants.
+  // Avoid ambiguous positional-argument overloads that may swap duration/position.
   const attempts = [
-    async () => device.linear(durationMs, position),
-    async () => device.linear([{ duration: durationMs, position }]),
-    async () => device.linear([{ Duration: durationMs, Position: position, Index: 0 }])
+    async () => device.linear([{ duration: safeDurationMs, position: safePosition }]),
+    async () => device.linear([{ Duration: safeDurationMs, Position: safePosition, Index: 0 }]),
+    async () => device.linear([{ duration: safeDurationSec, position: safePosition }]),
+    async () => device.linear([{ Duration: safeDurationSec, Position: safePosition, Index: 0 }])
   ];
 
   for (const attempt of attempts) {
@@ -74,25 +80,60 @@ export class HandyController {
   }
 
   async connect() {
-    if (this.client) return;
+    if (this.client && this.client.connected === true) return;
+
+    // Recover from stale/disconnected client instances.
+    if (this.client && this.client.connected !== true) {
+      this.client = null;
+      this.device = null;
+    }
 
     this.client = new ButtplugClient(this.clientName);
     const connector = new ButtplugNodeWebsocketClientConnector(this.serverUrl);
     await this.client.connect(connector);
 
     this.client.addListener("deviceadded", (device) => {
+      // eslint-disable-next-line no-console
+      console.log(`[device] discovered: ${device.name}`);
       if (
         !this.device &&
         device.name.toLowerCase().includes(this.deviceNameFilter)
       ) {
+        // eslint-disable-next-line no-console
+        console.log(`[device] selected: ${device.name}`);
         this.device = device;
       }
     });
 
+    this.selectFromExistingDevices();
     await this.client.startScanning();
   }
 
+  selectFromExistingDevices() {
+    if (!this.client || this.device) return;
+
+    // Depending on buttplug client version, devices may be exposed as an array or map-like object.
+    const rawDevices = this.client.devices;
+    const devices = Array.isArray(rawDevices)
+      ? rawDevices
+      : rawDevices && typeof rawDevices.values === "function"
+        ? Array.from(rawDevices.values())
+        : [];
+
+    for (const device of devices) {
+      // eslint-disable-next-line no-console
+      console.log(`[device] existing: ${device.name}`);
+      if (device.name.toLowerCase().includes(this.deviceNameFilter)) {
+        // eslint-disable-next-line no-console
+        console.log(`[device] selected existing: ${device.name}`);
+        this.device = device;
+        return;
+      }
+    }
+  }
+
   async ensureDevice(timeoutMs = 10000) {
+    this.selectFromExistingDevices();
     if (this.device) return this.device;
 
     const end = Date.now() + timeoutMs;
@@ -110,6 +151,10 @@ export class HandyController {
   }
 
   async runMotion(motion, motionConfig = {}, options = {}) {
+    if (!this.client || this.client.connected !== true) {
+      await this.connect();
+    }
+
     // Set false to allow overlaps; true preempts old motions on each new one.
     const stopPreviousOnNewMotion = options.stopPreviousOnNewMotion ?? true;
     const sequence = stopPreviousOnNewMotion ? ++this.motionSequence : this.motionSequence;
