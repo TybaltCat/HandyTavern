@@ -6,6 +6,9 @@ const DEFAULTS = {
   strictTagOnly: true,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
+  safeMode: false,
+  safeMaxSpeed: 60,
+  safeMaxDurationMs: 4000,
   handyConnectionKey: "",
   strokeRange: 100,
   speedMin: 0,
@@ -38,6 +41,7 @@ normalizePercentSetting("strokeRange");
 normalizePercentSetting("speedMin");
 normalizePercentSetting("speedMax");
 normalizePercentSetting("minimumAllowedStroke");
+normalizePercentSetting("safeMaxSpeed");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -112,6 +116,9 @@ async function syncConfig() {
     speedMin: clampPercent(settings.speedMin) / 100,
     speedMax: clampPercent(settings.speedMax) / 100,
     minimumAllowedStroke: clampPercent(settings.minimumAllowedStroke) / 100,
+    safeMode: Boolean(settings.safeMode),
+    safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
+    safeMaxDurationMs: Math.max(250, Number(settings.safeMaxDurationMs) || 4000),
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
   };
 
@@ -144,9 +151,12 @@ function onInputChange(event) {
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
   if (
     type === "number" &&
-    ["strokeRange", "speedMin", "speedMax", "minimumAllowedStroke"].includes(name)
+    ["strokeRange", "speedMin", "speedMax", "minimumAllowedStroke", "safeMaxSpeed"].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
+  }
+  if (type === "number" && name === "safeMaxDurationMs") {
+    settings[name] = Math.max(250, Number(settings[name]) || 4000);
   }
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
@@ -171,6 +181,31 @@ async function handleTestMotion() {
   } catch (error) {
     setStatus(`Test error: ${error.message}`);
   }
+}
+
+function currentTestSpeed() {
+  const min = clampPercent(settings.speedMin);
+  const max = clampPercent(settings.speedMax);
+  if (max < min) return min;
+  return Math.round((min + max) / 2);
+}
+
+async function sendModeTest(style, depth) {
+  const speed = currentTestSpeed();
+  const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=3s]`;
+  try {
+    await postJson("/motion", { text: testTag });
+    setStatus(`Mode test sent: ${style}/${depth}`);
+  } catch (error) {
+    setStatus(`Mode test error: ${error.message}`);
+  }
+}
+
+async function toggleSafeMode(enabled) {
+  settings.safeMode = Boolean(enabled);
+  saveSettings();
+  await syncConfig();
+  setStatus(`Safe Mode ${settings.safeMode ? "ON" : "OFF"}`);
 }
 
 function setPanelCollapsed(panel, collapsed) {
@@ -219,6 +254,14 @@ function renderSettingsPanel() {
       <input type="number" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
     </div>
     <div class="tavernplug-row">
+      <label>Safe Max Speed (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="safeMaxSpeed" value="${settings.safeMaxSpeed}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Safe Max Duration (ms)</label>
+      <input type="number" step="100" min="250" name="safeMaxDurationMs" value="${settings.safeMaxDurationMs}" />
+    </div>
+    <div class="tavernplug-row">
       <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
       <label>
         <input type="checkbox" name="autoSend" ${settings.autoSend ? "checked" : ""} />
@@ -232,9 +275,26 @@ function renderSettingsPanel() {
         <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
         Stop previous motion when a new message is sent
       </label>
+      <label>
+        <input type="checkbox" name="safeMode" ${settings.safeMode ? "checked" : ""} />
+        Safe Mode
+      </label>
     </div>
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Motion</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-gentle">Gentle</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-normal">Normal</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-rough">Rough</button>
+    </div>
+    <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-tip">Tip</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-middle">Middle</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-full">Full</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
+    </div>
+    <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-status">Idle</div>
@@ -246,6 +306,33 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-test`)?.addEventListener("click", () => {
     void handleTestMotion();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
+    void sendModeTest("gentle", "middle");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-mode-normal`)?.addEventListener("click", () => {
+    void sendModeTest("normal", "middle");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-mode-rough`)?.addEventListener("click", () => {
+    void sendModeTest("rough", "middle");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-depth-tip`)?.addEventListener("click", () => {
+    void sendModeTest("normal", "tip");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-depth-middle`)?.addEventListener("click", () => {
+    void sendModeTest("normal", "middle");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-depth-full`)?.addEventListener("click", () => {
+    void sendModeTest("normal", "full");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-depth-deep`)?.addEventListener("click", () => {
+    void sendModeTest("normal", "deep");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-safe-on`)?.addEventListener("click", () => {
+    void toggleSafeMode(true);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-safe-off`)?.addEventListener("click", () => {
+    void toggleSafeMode(false);
   });
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();

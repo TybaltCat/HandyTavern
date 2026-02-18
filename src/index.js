@@ -14,6 +14,12 @@ app.use((req, res, next) => {
   }
   return next();
 });
+app.use((req, _res, next) => {
+  // Basic request trace for troubleshooting extension connectivity.
+  // eslint-disable-next-line no-console
+  console.log(`[http] ${req.method} ${req.path}`);
+  next();
+});
 app.use(express.json({ limit: "256kb" }));
 
 const port = Number(process.env.PORT ?? 8787);
@@ -35,6 +41,9 @@ let motionConfig = {
   speedMin: Number(process.env.SPEED_MIN ?? 0),
   speedMax: Number(process.env.SPEED_MAX ?? 1),
   minimumAllowedStroke: Number(process.env.MINIMUM_ALLOWED_STROKE ?? 0),
+  safeMode: String(process.env.SAFE_MODE ?? "false").toLowerCase() === "true",
+  safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.6),
+  safeMaxDurationMs: Number(process.env.SAFE_MAX_DURATION_MS ?? 4000),
   stopPreviousOnNewMotion:
     String(process.env.STOP_PREVIOUS_ON_NEW_MOTION ?? "true").toLowerCase() === "true"
 };
@@ -73,6 +82,18 @@ function sanitizeMotionConfig(input) {
       input.minimumAllowedStroke === undefined
         ? motionConfig.minimumAllowedStroke
         : Number(input.minimumAllowedStroke),
+    safeMode:
+      input.safeMode === undefined
+        ? motionConfig.safeMode
+        : parseBoolean(input.safeMode, motionConfig.safeMode),
+    safeMaxSpeed:
+      input.safeMaxSpeed === undefined
+        ? motionConfig.safeMaxSpeed
+        : Number(input.safeMaxSpeed),
+    safeMaxDurationMs:
+      input.safeMaxDurationMs === undefined
+        ? motionConfig.safeMaxDurationMs
+        : Number(input.safeMaxDurationMs),
     stopPreviousOnNewMotion:
       input.stopPreviousOnNewMotion === undefined
         ? motionConfig.stopPreviousOnNewMotion
@@ -91,11 +112,19 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.minimumAllowedStroke)) {
     throw new Error("minimumAllowedStroke must be a number between 0 and 1");
   }
+  if (!Number.isFinite(next.safeMaxSpeed)) {
+    throw new Error("safeMaxSpeed must be a number between 0 and 1");
+  }
+  if (!Number.isFinite(next.safeMaxDurationMs) || next.safeMaxDurationMs <= 0) {
+    throw new Error("safeMaxDurationMs must be a positive number");
+  }
 
   next.strokeRange = clamp01(next.strokeRange);
   next.speedMin = clamp01(next.speedMin);
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
+  next.safeMaxSpeed = clamp01(next.safeMaxSpeed);
+  next.safeMaxDurationMs = Math.round(next.safeMaxDurationMs);
 
   if (next.speedMax < next.speedMin) {
     const tmp = next.speedMin;
@@ -108,10 +137,23 @@ function sanitizeMotionConfig(input) {
 
 motionConfig = sanitizeMotionConfig(motionConfig);
 
+function applySafeModeToMotion(motion, config) {
+  if (!config.safeMode) return motion;
+  return {
+    ...motion,
+    speed: Math.min(motion.speed, config.safeMaxSpeed),
+    durationMs: Math.min(motion.durationMs, config.safeMaxDurationMs)
+  };
+}
+
 async function ensureReady() {
   if (ready || !enabled) return;
+  // eslint-disable-next-line no-console
+  console.log("[device] connecting to buttplug server...");
   await controller.connect();
   ready = true;
+  // eslint-disable-next-line no-console
+  console.log("[device] connected and scanning started");
 }
 
 app.get("/health", (_req, res) => {
@@ -169,8 +211,11 @@ app.post("/motion", async (req, res) => {
 
   try {
     await ensureReady();
+    const runMotion = applySafeModeToMotion(motion, motionConfig);
     if (enabled) {
-      await controller.runMotion(motion, motionConfig, {
+      // eslint-disable-next-line no-console
+      console.log("[motion] running", runMotion, `safeMode=${motionConfig.safeMode}`);
+      await controller.runMotion(runMotion, motionConfig, {
         stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion
       });
     }
@@ -178,7 +223,7 @@ app.post("/motion", async (req, res) => {
     return res.json({
       accepted: true,
       simulated: !enabled,
-      motion
+      motion: runMotion
     });
   } catch (error) {
     return res.status(500).json({
@@ -192,6 +237,10 @@ app.post("/motion", async (req, res) => {
 const server = app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`TavernPlug listening on http://127.0.0.1:${port}`);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[config] ENABLE_DEVICE=${enabled} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} DEVICE_NAME_FILTER=${process.env.DEVICE_NAME_FILTER ?? "handy"}`
+  );
 });
 
 if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
@@ -219,7 +268,8 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 
     try {
       await ensureReady();
-      await controller.runMotion(motion, motionConfig, {
+      const runMotion = applySafeModeToMotion(motion, motionConfig);
+      await controller.runMotion(runMotion, motionConfig, {
         stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion
       });
     } catch (error) {
