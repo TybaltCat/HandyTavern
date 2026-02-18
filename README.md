@@ -35,11 +35,13 @@ You should get a JSON response with parsed motion.
 
 ## SillyTavern integration idea
 
-This repo now includes an extension package at:
+This repo now includes extension files at the repository root:
 
-- `sillytavern-extension/tavernplug-handy`
+- `manifest.json`
+- `index.js`
+- `style.css`
 
-Install by copying that folder into your SillyTavern third-party extensions directory:
+Install by copying those files into a single folder in your SillyTavern third-party extensions directory, for example:
 
 - `<SillyTavern>/public/scripts/extensions/third-party/tavernplug-handy`
 

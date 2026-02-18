@@ -25,6 +25,7 @@ extension_settings[EXTENSION_NAME] = settings;
 let lastSentMessageId = -1;
 let pollHandle = null;
 let statusEl = null;
+let panelRetryHandle = null;
 
 function clamp01(value) {
   const num = Number(value);
@@ -38,6 +39,14 @@ function setStatus(message) {
 
 function messageHasMotionTag(text) {
   return /\[motion:\s*[^\]]+\]/i.test(text);
+}
+
+function findSettingsContainer() {
+  return (
+    document.querySelector("#extensions_settings") ||
+    document.querySelector("#extensions_settings2") ||
+    document.querySelector(".extensions_settings")
+  );
 }
 
 async function postJson(path, payload) {
@@ -132,7 +141,7 @@ async function handleTestMotion() {
 }
 
 function renderSettingsPanel() {
-  const container = document.querySelector("#extensions_settings");
+  const container = findSettingsContainer();
   if (!container || document.querySelector(`#${EXTENSION_NAME}-panel`)) return;
 
   const panel = document.createElement("div");
@@ -200,6 +209,27 @@ function renderSettingsPanel() {
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
 }
 
+function ensurePanelMounted() {
+  renderSettingsPanel();
+  if (document.querySelector(`#${EXTENSION_NAME}-panel`)) {
+    if (panelRetryHandle) {
+      clearInterval(panelRetryHandle);
+      panelRetryHandle = null;
+    }
+    return;
+  }
+
+  if (!panelRetryHandle) {
+    panelRetryHandle = setInterval(() => {
+      renderSettingsPanel();
+      if (document.querySelector(`#${EXTENSION_NAME}-panel`)) {
+        clearInterval(panelRetryHandle);
+        panelRetryHandle = null;
+      }
+    }, 1000);
+  }
+}
+
 function startPolling() {
   if (pollHandle) return;
   pollHandle = setInterval(() => {
@@ -209,7 +239,7 @@ function startPolling() {
 }
 
 function init() {
-  renderSettingsPanel();
+  ensurePanelMounted();
   startPolling();
   void syncConfig();
 }
