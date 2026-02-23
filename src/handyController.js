@@ -246,6 +246,30 @@ export class HandyController {
     await this.stopNow();
   }
 
+  async parkAtZero() {
+    if (!this.client || this.client.connected !== true) {
+      await this.connect();
+    }
+
+    const device = await this.ensureDevice();
+    // Cancel any active loops so park position is stable until next command.
+    this.motionSequence += 1;
+    await this.stopNow();
+
+    if (typeof device.linear === "function") {
+      await sendLinearStep(device, 450, 0);
+      return;
+    }
+
+    if (typeof device.scalar === "function") {
+      await device.scalar(0);
+      return;
+    }
+    if (typeof device.vibrate === "function") {
+      await device.vibrate(0);
+    }
+  }
+
   async stopNow(options = {}) {
     if (options.cancelPending === true) {
       this.motionSequence += 1;

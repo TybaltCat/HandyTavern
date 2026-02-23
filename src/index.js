@@ -40,8 +40,10 @@ const patternState = {
   step: 0,
   intervalHandle: null,
   stopHandle: null,
-  frameBusy: false
+  frameBusy: false,
+  restoreState: null
 };
+let lastMotionState = null;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
@@ -200,6 +202,42 @@ function runMotionAsync(runMotion, config) {
     });
 }
 
+function snapshotConfig(config) {
+  return {
+    strokeRange: config.strokeRange,
+    globalStrokeMin: config.globalStrokeMin,
+    globalStrokeMax: config.globalStrokeMax,
+    speedMin: config.speedMin,
+    speedMax: config.speedMax,
+    minimumAllowedStroke: config.minimumAllowedStroke,
+    safeMode: config.safeMode,
+    safeMaxSpeed: config.safeMaxSpeed,
+    safeMaxDurationMs: config.safeMaxDurationMs,
+    holdUntilNextCommand: config.holdUntilNextCommand,
+    stopPreviousOnNewMotion: config.stopPreviousOnNewMotion
+  };
+}
+
+function rememberLastMotionState(motion, config) {
+  lastMotionState = {
+    motion: { ...motion },
+    config: snapshotConfig(config)
+  };
+}
+
+async function runSavedMotionState(state) {
+  if (!state) return;
+  const cfg = snapshotConfig(state.config);
+  if (cfg.holdUntilNextCommand) {
+    void runMotionAsync({ ...state.motion }, cfg);
+    return;
+  }
+  await controller.runMotion({ ...state.motion }, cfg, {
+    stopPreviousOnNewMotion: cfg.stopPreviousOnNewMotion,
+    holdUntilNextCommand: false
+  });
+}
+
 function logMotionDebug(text) {
   const debug = getMotionDebug(text, { strictTag: strictMotionTagRuntime });
   if (debug.mode === "strict") {
@@ -325,6 +363,7 @@ function stopPatternRunner() {
   patternState.name = null;
   patternState.step = 0;
   patternState.frameBusy = false;
+  patternState.restoreState = null;
 }
 
 async function runPatternFrame(trigger) {
@@ -347,10 +386,17 @@ async function runPatternFrame(trigger) {
 }
 
 async function startPatternRunner(trigger) {
+  const restoreState = lastMotionState
+    ? {
+        motion: { ...lastMotionState.motion },
+        config: snapshotConfig(lastMotionState.config)
+      }
+    : null;
   stopPatternRunner();
   patternState.active = true;
   patternState.name = trigger.pattern;
   patternState.step = 0;
+  patternState.restoreState = restoreState;
 
   const intervalMs = Math.max(300, Math.min(15000, Math.round(trigger.intervalMs)));
   const totalDurationMs = Math.max(1000, Math.round(trigger.durationMs));
@@ -372,11 +418,28 @@ async function startPatternRunner(trigger) {
   }, intervalMs);
 
   patternState.stopHandle = setTimeout(async () => {
+    const stateToRestore = patternState.restoreState
+      ? {
+          motion: { ...patternState.restoreState.motion },
+          config: snapshotConfig(patternState.restoreState.config)
+        }
+      : null;
     stopPatternRunner();
     try {
       await controller.stopNow({ cancelPending: true });
     } catch (_error) {
       // Best-effort cleanup when pattern window expires.
+    }
+    if (stateToRestore && enabled) {
+      try {
+        await runSavedMotionState(stateToRestore);
+        // eslint-disable-next-line no-console
+        console.log("[pattern] ended; restored previous motion state");
+        return;
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("[pattern] restore failed:", error);
+      }
     }
     // eslint-disable-next-line no-console
     console.log("[pattern] stopped after duration window");
@@ -419,11 +482,29 @@ app.post("/config", (req, res) => {
 app.post("/emergency-stop", async (_req, res) => {
   try {
     stopPatternRunner();
+    lastMotionState = null;
     await ensureReady();
     if (enabled) {
       await controller.stopNow({ cancelPending: true });
     }
     return res.json({ ok: true, simulated: !enabled });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+});
+
+app.post("/park-hold", async (_req, res) => {
+  try {
+    stopPatternRunner();
+    lastMotionState = null;
+    await ensureReady();
+    if (enabled) {
+      await controller.parkAtZero();
+    }
+    return res.json({ ok: true, simulated: !enabled, parked: true, position: 0 });
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -518,6 +599,7 @@ app.post("/motion", async (req, res) => {
     await ensureReady();
     stopPatternRunner();
     const runMotion = applySafeModeToMotion(motion, motionConfig);
+    rememberLastMotionState(runMotion, motionConfig);
     if (enabled) {
       // eslint-disable-next-line no-console
       console.log(
@@ -716,6 +798,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
       await ensureReady();
       stopPatternRunner();
       const runMotion = applySafeModeToMotion(motion, motionConfig);
+      rememberLastMotionState(runMotion, motionConfig);
       if (motionConfig.holdUntilNextCommand) {
         void runMotionAsync(runMotion, motionConfig);
       } else {

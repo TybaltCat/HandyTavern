@@ -373,6 +373,16 @@ async function handleEmergencyStop() {
   }
 }
 
+async function handleParkHold() {
+  try {
+    stopPatternMode(false);
+    await postJson("/park-hold", {});
+    setStatus("Parked at 0 until next command");
+  } catch (error) {
+    setStatus(`Park error: ${error.message}`);
+  }
+}
+
 async function handleQuickEmergencyStop() {
   await handleEmergencyStop();
 }
@@ -795,6 +805,7 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-off">Strict OFF</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-park-hold">Park at 0</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-modes">Modes</div>
@@ -930,6 +941,9 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-park-hold`)?.addEventListener("click", () => {
+    void handleParkHold();
   });
   panel.querySelector(".tavernplug-advanced-toggle")?.addEventListener("click", () => {
     setAdvancedOpen(panel, !settings.advancedOpen);
