@@ -15,6 +15,11 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function easeInOutSine(value) {
+  const t = clamp01(value);
+  return -(Math.cos(Math.PI * t) - 1) / 2;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -205,13 +210,23 @@ export class HandyController {
 
     if (typeof device.linear === "function") {
       let toMax = true;
+      let currentPos = minStroke;
       const end = Date.now() + motion.durationMs;
       while (holdUntilNextCommand || Date.now() < end) {
         if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
         const remaining = holdUntilNextCommand ? halfCycleMs : end - Date.now();
         const stepMs = Math.max(25, Math.min(halfCycleMs, remaining));
         const target = toMax ? maxStroke : minStroke;
-        await sendLinearStep(device, stepMs, target);
+        const segmentCount = remapped > 0.8 ? 2 : 3;
+        const segmentMs = Math.max(20, Math.round(stepMs / segmentCount));
+
+        for (let index = 1; index <= segmentCount; index += 1) {
+          if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
+          const progress = easeInOutSine(index / segmentCount);
+          const interpolated = currentPos + (target - currentPos) * progress;
+          await sendLinearStep(device, segmentMs, interpolated);
+        }
+        currentPos = target;
         toMax = !toMax;
       }
       await this.stopNow();

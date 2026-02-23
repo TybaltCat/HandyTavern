@@ -45,10 +45,9 @@ const patternState = {
   step: 0,
   intervalHandle: null,
   stopHandle: null,
-  frameBusy: false,
-  restoreState: null
+  frameBusy: false
 };
-let lastMotionState = null;
+let motionRunToken = 0;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
@@ -207,39 +206,40 @@ function runMotionAsync(runMotion, config) {
     });
 }
 
-function snapshotConfig(config) {
-  return {
-    strokeRange: config.strokeRange,
-    globalStrokeMin: config.globalStrokeMin,
-    globalStrokeMax: config.globalStrokeMax,
-    speedMin: config.speedMin,
-    speedMax: config.speedMax,
-    minimumAllowedStroke: config.minimumAllowedStroke,
-    safeMode: config.safeMode,
-    safeMaxSpeed: config.safeMaxSpeed,
-    safeMaxDurationMs: config.safeMaxDurationMs,
-    holdUntilNextCommand: config.holdUntilNextCommand,
-    stopPreviousOnNewMotion: config.stopPreviousOnNewMotion
-  };
+function cancelMotionRunner() {
+  motionRunToken += 1;
 }
 
-function rememberLastMotionState(motion, config) {
-  lastMotionState = {
-    motion: { ...motion },
-    config: snapshotConfig(config)
+function startMotionRunner(runMotion, config) {
+  const token = ++motionRunToken;
+  const cfg = {
+    stopPreviousOnNewMotion: config.stopPreviousOnNewMotion,
+    holdUntilNextCommand: config.holdUntilNextCommand
   };
-}
 
-async function runSavedMotionState(state) {
-  if (!state) return;
-  const cfg = snapshotConfig(state.config);
-  if (cfg.holdUntilNextCommand) {
-    void runMotionAsync({ ...state.motion }, cfg);
-    return;
-  }
-  await controller.runMotion({ ...state.motion }, cfg, {
-    stopPreviousOnNewMotion: cfg.stopPreviousOnNewMotion,
-    holdUntilNextCommand: false
+  const loop = async () => {
+    if (cfg.holdUntilNextCommand) {
+      await controller.runMotion(runMotion, config, {
+        stopPreviousOnNewMotion: true,
+        holdUntilNextCommand: true
+      });
+      return;
+    }
+
+    let firstPass = true;
+    while (token === motionRunToken) {
+      await controller.runMotion(runMotion, config, {
+        stopPreviousOnNewMotion: firstPass,
+        holdUntilNextCommand: false
+      });
+      firstPass = false;
+      if (token !== motionRunToken) return;
+    }
+  };
+
+  void loop().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error("[motion] runner error:", error);
   });
 }
 
@@ -368,7 +368,6 @@ function stopPatternRunner() {
   patternState.name = null;
   patternState.step = 0;
   patternState.frameBusy = false;
-  patternState.restoreState = null;
 }
 
 async function runPatternFrame(trigger) {
@@ -391,17 +390,10 @@ async function runPatternFrame(trigger) {
 }
 
 async function startPatternRunner(trigger) {
-  const restoreState = lastMotionState
-    ? {
-        motion: { ...lastMotionState.motion },
-        config: snapshotConfig(lastMotionState.config)
-      }
-    : null;
   stopPatternRunner();
   patternState.active = true;
   patternState.name = trigger.pattern;
   patternState.step = 0;
-  patternState.restoreState = restoreState;
 
   const intervalMs = Math.max(300, Math.min(15000, Math.round(trigger.intervalMs)));
   const totalDurationMs = Math.max(1000, Math.round(trigger.durationMs));
@@ -422,33 +414,16 @@ async function startPatternRunner(trigger) {
     void tick();
   }, intervalMs);
 
-  patternState.stopHandle = setTimeout(async () => {
-    const stateToRestore = patternState.restoreState
-      ? {
-          motion: { ...patternState.restoreState.motion },
-          config: snapshotConfig(patternState.restoreState.config)
-        }
-      : null;
-    stopPatternRunner();
-    try {
-      await controller.stopNow({ cancelPending: true });
-    } catch (_error) {
-      // Best-effort cleanup when pattern window expires.
-    }
-    if (stateToRestore && enabled) {
-      try {
-        await runSavedMotionState(stateToRestore);
-        // eslint-disable-next-line no-console
-        console.log("[pattern] ended; restored previous motion state");
-        return;
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error("[pattern] restore failed:", error);
-      }
-    }
-    // eslint-disable-next-line no-console
-    console.log("[pattern] stopped after duration window");
-  }, totalDurationMs);
+  const scheduleWindowReset = () => {
+    patternState.stopHandle = setTimeout(() => {
+      if (!patternState.active) return;
+      patternState.step = 0;
+      // eslint-disable-next-line no-console
+      console.log("[pattern] duration window elapsed; restarting pattern cycle");
+      scheduleWindowReset();
+    }, totalDurationMs);
+  };
+  scheduleWindowReset();
 }
 
 async function ensureReady() {
@@ -487,7 +462,7 @@ app.post("/config", (req, res) => {
 app.post("/emergency-stop", async (_req, res) => {
   try {
     stopPatternRunner();
-    lastMotionState = null;
+    cancelMotionRunner();
     await ensureReady();
     if (enabled) {
       await controller.stopNow({ cancelPending: true });
@@ -504,7 +479,7 @@ app.post("/emergency-stop", async (_req, res) => {
 app.post("/park-hold", async (_req, res) => {
   try {
     stopPatternRunner();
-    lastMotionState = null;
+    cancelMotionRunner();
     await ensureReady();
     if (enabled) {
       await controller.parkAtZero();
@@ -539,6 +514,7 @@ app.post("/motion", async (req, res) => {
   }
 
   if (patternTrigger) {
+    cancelMotionRunner();
     if (patternTrigger.stop) {
       try {
         stopPatternRunner();
@@ -583,11 +559,21 @@ app.post("/motion", async (req, res) => {
   }
 
   if (!hasMotionIntent(text, { strictTag: strictMotionTagRuntime })) {
+    try {
+      await ensureReady();
+      if (enabled) {
+        cancelMotionRunner();
+        await controller.parkAtZero();
+      }
+    } catch (_error) {
+      // Best-effort idle park.
+    }
     return res.json({
       accepted: true,
       simulated: !enabled,
       skipped: true,
-      reason: "No motion intent detected"
+      reason: "No motion intent detected",
+      parked: true
     });
   }
 
@@ -612,8 +598,8 @@ app.post("/motion", async (req, res) => {
   try {
     await ensureReady();
     stopPatternRunner();
+    cancelMotionRunner();
     const runMotion = applySafeModeToMotion(motion, motionConfig);
-    rememberLastMotionState(runMotion, motionConfig);
     if (enabled) {
       // eslint-disable-next-line no-console
       console.log(
@@ -621,14 +607,7 @@ app.post("/motion", async (req, res) => {
         runMotion,
         `safeMode=${motionConfig.safeMode} holdUntilNextCommand=${motionConfig.holdUntilNextCommand}`
       );
-      if (motionConfig.holdUntilNextCommand) {
-        void runMotionAsync(runMotion, motionConfig);
-      } else {
-        await controller.runMotion(runMotion, motionConfig, {
-          stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion,
-          holdUntilNextCommand: false
-        });
-      }
+      startMotionRunner(runMotion, motionConfig);
     }
 
     return res.json({
@@ -811,16 +790,9 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
     try {
       await ensureReady();
       stopPatternRunner();
+      cancelMotionRunner();
       const runMotion = applySafeModeToMotion(motion, motionConfig);
-      rememberLastMotionState(runMotion, motionConfig);
-      if (motionConfig.holdUntilNextCommand) {
-        void runMotionAsync(runMotion, motionConfig);
-      } else {
-        await controller.runMotion(runMotion, motionConfig, {
-          stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion,
-          holdUntilNextCommand: false
-        });
-      }
+      startMotionRunner(runMotion, motionConfig);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("device error:", error);
