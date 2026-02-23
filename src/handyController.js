@@ -37,7 +37,20 @@ function remapSpeed(speed, speedMin, speedMax) {
 function computeStrokePosition(depth, motionConfig) {
   const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
   const strokeRange = clamp01(motionConfig.strokeRange ?? 1);
-  return clamp01(minStroke + depthToNormalizedStroke(depth) * strokeRange);
+  const local = clamp01(minStroke + depthToNormalizedStroke(depth) * strokeRange);
+  return applyGlobalStrokeWindow(local, motionConfig);
+}
+
+function getGlobalStrokeWindow(motionConfig) {
+  const min = clamp01(motionConfig.globalStrokeMin ?? 0);
+  const max = clamp01(motionConfig.globalStrokeMax ?? 1);
+  if (max < min) return { min: max, max: min };
+  return { min, max };
+}
+
+function applyGlobalStrokeWindow(value, motionConfig) {
+  const { min, max } = getGlobalStrokeWindow(motionConfig);
+  return clamp01(min + clamp01(value) * (max - min));
 }
 
 async function runLinearIfSupported(device, durationMs, position) {
@@ -178,9 +191,12 @@ export class HandyController {
     const scalar = clamp01(remapped * depthMultiplier);
     // User-tunable stroke limits are applied inside computeStrokePosition().
     const strokePosition = computeStrokePosition(motion.depth, motionConfig);
-    const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+    const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+    const minStroke = applyGlobalStrokeWindow(localMin, motionConfig);
     const maxStroke = Math.max(minStroke + 0.05, strokePosition);
-    const halfCycleMs = Math.max(120, Math.round(800 - remapped * 650));
+    // More aggressive cycle timing so upper speed values feel substantially faster.
+    // 0.0 -> ~320ms half-cycle, 1.0 -> ~45ms half-cycle.
+    const halfCycleMs = Math.max(45, Math.round(320 - remapped * 275));
 
     if (stopPreviousOnNewMotion) {
       await this.stopNow();
@@ -193,7 +209,7 @@ export class HandyController {
       while (holdUntilNextCommand || Date.now() < end) {
         if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
         const remaining = holdUntilNextCommand ? halfCycleMs : end - Date.now();
-        const stepMs = Math.max(40, Math.min(halfCycleMs, remaining));
+        const stepMs = Math.max(25, Math.min(halfCycleMs, remaining));
         const target = toMax ? maxStroke : minStroke;
         await sendLinearStep(device, stepMs, target);
         toMax = !toMax;

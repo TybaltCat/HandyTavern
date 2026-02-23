@@ -78,9 +78,12 @@ Strict mode is enabled by default (`STRICT_MOTION_TAG=true`). The motion tag is 
 ## Bridge API endpoints
 
 - `POST /motion` with `{ "text": "[motion: ...]" }`
+- `POST /preview-motion` with `{ "text": "[motion: ...]" }` (parse + transform preview only, no device command)
 - `POST /config` with:
   - `handyConnectionKey` (string)
   - `strokeRange` (0..1)
+  - `globalStrokeMin` (0..1)
+  - `globalStrokeMax` (0..1)
   - `speedMin` (0..1)
   - `speedMax` (0..1)
   - `minimumAllowedStroke` (0..1)

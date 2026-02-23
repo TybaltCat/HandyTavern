@@ -4,18 +4,22 @@ const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   autoSend: true,
   strictTagOnly: true,
+  advancedOpen: false,
   holdUntilNextCommand: false,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
   safeMode: false,
   safeMaxSpeed: 60,
   safeMaxDurationMs: 4000,
+  patternIntervalMs: 1800,
   testSpeedGentlePct: 20,
   testSpeedBriskPct: 40,
   testSpeedNormalPct: 55,
   testSpeedHardPct: 75,
   testSpeedIntensePct: 90,
   handyConnectionKey: "",
+  globalStrokeMinPct: 0,
+  globalStrokeMaxPct: 100,
   strokeRange: 100,
   speedMin: 0,
   speedMax: 100,
@@ -53,16 +57,22 @@ normalizePercentSetting("testSpeedBriskPct");
 normalizePercentSetting("testSpeedNormalPct");
 normalizePercentSetting("testSpeedHardPct");
 normalizePercentSetting("testSpeedIntensePct");
+normalizePercentSetting("globalStrokeMinPct");
+normalizePercentSetting("globalStrokeMaxPct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
 let pollHandle = null;
 let statusEl = null;
+let modeStateEl = null;
 let panelRetryHandle = null;
 let testModeActive = false;
 let testModeStyle = "normal";
 let testModeDepth = "middle";
 let preTestHoldSetting = null;
+let patternIntervalHandle = null;
+let activePatternName = null;
+let patternStep = 0;
 
 function clampPercent(value) {
   const num = Number(value);
@@ -81,6 +91,30 @@ function normalizePercentSetting(name) {
 
 function setStatus(message) {
   if (statusEl) statusEl.textContent = message;
+}
+
+function updateModeStateLine() {
+  if (!modeStateEl) return;
+  modeStateEl.textContent = [
+    `Strict: ${settings.strictTagOnly ? "ON" : "OFF"}`,
+    `Hold: ${settings.holdUntilNextCommand ? "ON" : "OFF"}`,
+    `Safe: ${settings.safeMode ? "ON" : "OFF"}`,
+    `Test: ${testModeActive ? "ON" : "OFF"}`,
+    `Pattern: ${activePatternName ?? "OFF"}`
+  ].join(" | ");
+}
+
+function setAdvancedOpen(panel, open) {
+  settings.advancedOpen = Boolean(open);
+  const body = panel.querySelector(".tavernplug-advanced-body");
+  const button = panel.querySelector(".tavernplug-advanced-toggle");
+  if (body) body.style.display = settings.advancedOpen ? "block" : "none";
+  if (button) {
+    button.textContent = settings.advancedOpen
+      ? "Advanced Settings (-)"
+      : "Advanced Settings (+)";
+  }
+  saveSettings();
 }
 
 function messageHasMotionTag(text) {
@@ -127,6 +161,8 @@ async function syncConfig() {
   // Keep this payload aligned with POST /config in src/index.js.
   const payload = {
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
+    globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
+    globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
     strokeRange: clampPercent(settings.strokeRange) / 100,
     speedMin: clampPercent(settings.speedMin) / 100,
     speedMax: clampPercent(settings.speedMax) / 100,
@@ -177,13 +213,24 @@ function onInputChange(event) {
       "testSpeedBriskPct",
       "testSpeedNormalPct",
       "testSpeedHardPct",
-      "testSpeedIntensePct"
+      "testSpeedIntensePct",
+      "globalStrokeMinPct",
+      "globalStrokeMaxPct"
     ].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
   }
   if (type === "number" && name === "safeMaxDurationMs") {
     settings[name] = Math.max(250, Number(settings[name]) || 4000);
+  }
+  if (name === "globalStrokeMinPct" && Number(settings.globalStrokeMinPct) > Number(settings.globalStrokeMaxPct)) {
+    settings.globalStrokeMaxPct = settings.globalStrokeMinPct;
+  }
+  if (name === "globalStrokeMaxPct" && Number(settings.globalStrokeMaxPct) < Number(settings.globalStrokeMinPct)) {
+    settings.globalStrokeMinPct = settings.globalStrokeMaxPct;
+  }
+  if (type === "number" && name === "patternIntervalMs") {
+    settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
   }
   const isLiveMotionControl = [
     "strokeRange",
@@ -194,11 +241,18 @@ function onInputChange(event) {
     "testSpeedBriskPct",
     "testSpeedNormalPct",
     "testSpeedHardPct",
-    "testSpeedIntensePct"
+    "testSpeedIntensePct",
+    "globalStrokeMinPct",
+    "globalStrokeMaxPct"
   ].includes(name);
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
+  if (activePatternName && name === "patternIntervalMs") {
+    setTimeout(() => {
+      void startPatternMode(activePatternName);
+    }, 150);
+  }
   if (testModeActive && isLiveMotionControl) {
     // Re-send current mode so live adjustments apply immediately.
     setTimeout(() => {
@@ -209,6 +263,7 @@ function onInputChange(event) {
 
 async function handleEmergencyStop() {
   try {
+    stopPatternMode(false);
     await postJson("/emergency-stop", {});
     setStatus("Emergency stop sent");
   } catch (error) {
@@ -216,22 +271,99 @@ async function handleEmergencyStop() {
   }
 }
 
+async function startTestMode() {
+  const testButton = document.querySelector(`#${EXTENSION_NAME}-test`);
+  preTestHoldSetting = Boolean(settings.holdUntilNextCommand);
+  settings.holdUntilNextCommand = true;
+  saveSettings();
+  await syncConfig();
+  testModeActive = true;
+  updateModeStateLine();
+  if (testButton) testButton.textContent = "Test Mode Stop";
+  await sendModeTest(testModeStyle, testModeDepth);
+  setStatus("Test mode started");
+}
+
+function stopPatternMode(updateStatus = true) {
+  if (patternIntervalHandle) {
+    clearInterval(patternIntervalHandle);
+    patternIntervalHandle = null;
+  }
+  activePatternName = null;
+  patternStep = 0;
+  updateModeStateLine();
+  if (updateStatus) setStatus("Pattern stopped");
+}
+
+function nextPatternFrame(name, step) {
+  if (name === "wave") {
+    const cycle = [
+      ["gentle", "middle"],
+      ["brisk", "middle"],
+      ["normal", "middle"],
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["normal", "middle"],
+      ["brisk", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "pulse") {
+    if (step % 4 === 3) return { style: "intense", depth: "deep" };
+    return { style: "normal", depth: "middle" };
+  }
+
+  if (name === "ramp") {
+    const cycle = ["gentle", "brisk", "normal", "hard", "intense"];
+    return { style: cycle[step % cycle.length], depth: "middle" };
+  }
+
+  const styles = ["gentle", "brisk", "normal", "hard", "intense"];
+  const depths = ["tip", "middle", "full", "deep"];
+  return {
+    style: styles[Math.floor(Math.random() * styles.length)],
+    depth: depths[Math.floor(Math.random() * depths.length)]
+  };
+}
+
+async function startPatternMode(name) {
+  if (!testModeActive) {
+    await startTestMode();
+  }
+  stopPatternMode(false);
+  activePatternName = name;
+  patternStep = 0;
+  updateModeStateLine();
+
+  const tick = async () => {
+    const frame = nextPatternFrame(name, patternStep);
+    await sendModeTest(frame.style, frame.depth);
+  };
+
+  await tick();
+  const intervalMs = Math.max(
+    300,
+    Math.min(15000, Number(settings.patternIntervalMs) || 1800)
+  );
+  patternIntervalHandle = setInterval(() => {
+    patternStep += 1;
+    void tick();
+  }, intervalMs);
+  setStatus(`Pattern running: ${name} @ ${intervalMs}ms`);
+}
+
 async function handleTestMotion() {
   const testButton = document.querySelector(`#${EXTENSION_NAME}-test`);
-
   if (!testModeActive) {
-    preTestHoldSetting = Boolean(settings.holdUntilNextCommand);
-    settings.holdUntilNextCommand = true;
-    saveSettings();
-    await syncConfig();
-    testModeActive = true;
-    if (testButton) testButton.textContent = "Test Mode Stop";
-    await sendModeTest(testModeStyle, testModeDepth);
-    setStatus("Test mode started");
+    await startTestMode();
     return;
   }
 
   try {
+    stopPatternMode(false);
     await postJson("/emergency-stop", {});
     if (preTestHoldSetting !== null) {
       settings.holdUntilNextCommand = preTestHoldSetting;
@@ -240,6 +372,7 @@ async function handleTestMotion() {
       await syncConfig();
     }
     testModeActive = false;
+    updateModeStateLine();
     if (testButton) testButton.textContent = "Test Mode Start";
     setStatus("Test mode stopped");
   } catch (error) {
@@ -262,6 +395,10 @@ function speedSettingKeyForStyle(style) {
   return "testSpeedNormalPct";
 }
 
+function styleSpeedInputId(style) {
+  return `${EXTENSION_NAME}-speed-${style}`;
+}
+
 function currentStyleSpeed(style) {
   const min = clampPercent(settings.speedMin);
   const max = clampPercent(settings.speedMax);
@@ -270,6 +407,21 @@ function currentStyleSpeed(style) {
   const stylePct = clampPercent(settings[speedSettingKeyForStyle(style)]);
   const clamped = Math.max(min, Math.min(max, stylePct));
   return Math.round(clamped);
+}
+
+function adjustStyleSpeed(style, delta) {
+  const key = speedSettingKeyForStyle(style);
+  const current = Number(settings[key]) || 0;
+  settings[key] = clampPercent(current + delta);
+  const input = document.querySelector(`#${styleSpeedInputId(style)}`);
+  if (input) input.value = settings[key];
+  saveSettings();
+  void syncConfig();
+  if (testModeActive) {
+    setTimeout(() => {
+      void sendModeTest(testModeStyle, testModeDepth);
+    }, 120);
+  }
 }
 
 async function sendModeTest(style, depth) {
@@ -289,6 +441,7 @@ async function toggleSafeMode(enabled) {
   settings.safeMode = Boolean(enabled);
   saveSettings();
   await syncConfig();
+  updateModeStateLine();
   setStatus(`Safe Mode ${settings.safeMode ? "ON" : "OFF"}`);
 }
 
@@ -296,7 +449,15 @@ async function toggleHoldMode(enabled) {
   settings.holdUntilNextCommand = Boolean(enabled);
   saveSettings();
   await syncConfig();
+  updateModeStateLine();
   setStatus(`Hold Until Next Command ${settings.holdUntilNextCommand ? "ON" : "OFF"}`);
+}
+
+function toggleStrictMode(enabled) {
+  settings.strictTagOnly = Boolean(enabled);
+  saveSettings();
+  updateModeStateLine();
+  setStatus(`Strict Tags ${settings.strictTagOnly ? "ON" : "OFF"}`);
 }
 
 function setPanelCollapsed(panel, collapsed) {
@@ -325,12 +486,12 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
-      <label>Stroke Range (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
+      <label>Global Stroke Min (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
     </div>
     <div class="tavernplug-row">
-      <label>Minimum Allowed Stroke (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
+      <label>Global Stroke Max (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="globalStrokeMaxPct" value="${settings.globalStrokeMaxPct}" />
     </div>
     <div class="tavernplug-row">
       <label>Speed Range Min (0-100)</label>
@@ -349,24 +510,61 @@ function renderSettingsPanel() {
       <input type="number" step="100" min="250" name="safeMaxDurationMs" value="${settings.safeMaxDurationMs}" />
     </div>
     <div class="tavernplug-row">
+      <label>Pattern Interval (ms)</label>
+      <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
+    </div>
+    <div class="tavernplug-row">
+      <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
+    </div>
+    <div class="tavernplug-advanced-body" style="display:none;">
+    <div class="tavernplug-row">
+      <label>Stroke Range (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Minimum Allowed Stroke (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
+    </div>
+    <div class="tavernplug-row">
       <label>Gentle Speed %</label>
-      <input type="number" step="1" min="0" max="100" name="testSpeedGentlePct" value="${settings.testSpeedGentlePct}" />
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-down">-10</button>
+        <input id="${styleSpeedInputId("gentle")}" type="number" step="1" min="0" max="100" name="testSpeedGentlePct" value="${settings.testSpeedGentlePct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-up">+10</button>
+      </div>
     </div>
     <div class="tavernplug-row">
       <label>Brisk Speed %</label>
-      <input type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-down">-10</button>
+        <input id="${styleSpeedInputId("brisk")}" type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-up">+10</button>
+      </div>
     </div>
     <div class="tavernplug-row">
       <label>Normal Speed %</label>
-      <input type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-down">-10</button>
+        <input id="${styleSpeedInputId("normal")}" type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-up">+10</button>
+      </div>
     </div>
     <div class="tavernplug-row">
       <label>Hard Speed %</label>
-      <input type="number" step="1" min="0" max="100" name="testSpeedHardPct" value="${settings.testSpeedHardPct}" />
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-down">-10</button>
+        <input id="${styleSpeedInputId("hard")}" type="number" step="1" min="0" max="100" name="testSpeedHardPct" value="${settings.testSpeedHardPct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-up">+10</button>
+      </div>
     </div>
     <div class="tavernplug-row">
       <label>Intense Speed %</label>
-      <input type="number" step="1" min="0" max="100" name="testSpeedIntensePct" value="${settings.testSpeedIntensePct}" />
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-down">-10</button>
+        <input id="${styleSpeedInputId("intense")}" type="number" step="1" min="0" max="100" name="testSpeedIntensePct" value="${settings.testSpeedIntensePct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-up">+10</button>
+      </div>
+    </div>
     </div>
     <div class="tavernplug-row">
       <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
@@ -400,6 +598,13 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-intense">Intense</button>
     </div>
     <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-wave">Wave</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-pulse">Pulse</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-ramp">Ramp</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-random">Random</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-stop">Stop Pattern</button>
+    </div>
+    <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-tip">Tip</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-middle">Middle</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-full">Full</button>
@@ -408,10 +613,13 @@ function renderSettingsPanel() {
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-on">Hold ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-off">Hold OFF</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-on">Strict ON</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-off">Strict OFF</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
+    <div class="tavernplug-status" id="${EXTENSION_NAME}-modes">Modes</div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-status">Idle</div>
     </div>
   `;
@@ -423,30 +631,84 @@ function renderSettingsPanel() {
     void handleTestMotion();
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("gentle", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-gentle-down`)?.addEventListener("click", () => {
+    adjustStyleSpeed("gentle", -10);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-gentle-up`)?.addEventListener("click", () => {
+    adjustStyleSpeed("gentle", 10);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-mode-brisk`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("brisk", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-brisk-down`)?.addEventListener("click", () => {
+    adjustStyleSpeed("brisk", -10);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-brisk-up`)?.addEventListener("click", () => {
+    adjustStyleSpeed("brisk", 10);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-mode-normal`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("normal", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-normal-down`)?.addEventListener("click", () => {
+    adjustStyleSpeed("normal", -10);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-normal-up`)?.addEventListener("click", () => {
+    adjustStyleSpeed("normal", 10);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-mode-hard`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("hard", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-hard-down`)?.addEventListener("click", () => {
+    adjustStyleSpeed("hard", -10);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-hard-up`)?.addEventListener("click", () => {
+    adjustStyleSpeed("hard", 10);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-mode-intense`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("intense", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-wave`)?.addEventListener("click", () => {
+    void startPatternMode("wave");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-pulse`)?.addEventListener("click", () => {
+    void startPatternMode("pulse");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-ramp`)?.addEventListener("click", () => {
+    void startPatternMode("ramp");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-random`)?.addEventListener("click", () => {
+    void startPatternMode("random");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-stop`)?.addEventListener("click", () => {
+    stopPatternMode();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-intense-down`)?.addEventListener("click", () => {
+    adjustStyleSpeed("intense", -10);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-intense-up`)?.addEventListener("click", () => {
+    adjustStyleSpeed("intense", 10);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-depth-tip`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("normal", "tip");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-middle`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("normal", "middle");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-full`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("normal", "full");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-deep`)?.addEventListener("click", () => {
+    stopPatternMode(false);
     void sendModeTest("normal", "deep");
   });
   panel.querySelector(`#${EXTENSION_NAME}-safe-on`)?.addEventListener("click", () => {
@@ -461,16 +723,28 @@ function renderSettingsPanel() {
   panel.querySelector(`#${EXTENSION_NAME}-hold-off`)?.addEventListener("click", () => {
     void toggleHoldMode(false);
   });
+  panel.querySelector(`#${EXTENSION_NAME}-strict-on`)?.addEventListener("click", () => {
+    toggleStrictMode(true);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-strict-off`)?.addEventListener("click", () => {
+    toggleStrictMode(false);
+  });
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();
+  });
+  panel.querySelector(".tavernplug-advanced-toggle")?.addEventListener("click", () => {
+    setAdvancedOpen(panel, !settings.advancedOpen);
   });
   panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
     setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
   });
+  setAdvancedOpen(panel, settings.advancedOpen);
   setPanelCollapsed(panel, settings.panelCollapsed);
 
   container.append(panel);
+  modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
+  updateModeStateLine();
 }
 
 function ensurePanelMounted() {

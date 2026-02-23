@@ -38,6 +38,8 @@ let ready = false;
 let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
+  globalStrokeMin: Number(process.env.GLOBAL_STROKE_MIN ?? 0),
+  globalStrokeMax: Number(process.env.GLOBAL_STROKE_MAX ?? 1),
   speedMin: Number(process.env.SPEED_MIN ?? 0),
   speedMax: Number(process.env.SPEED_MAX ?? 1),
   minimumAllowedStroke: Number(process.env.MINIMUM_ALLOWED_STROKE ?? 0),
@@ -76,6 +78,14 @@ function sanitizeMotionConfig(input) {
       input.strokeRange === undefined
         ? motionConfig.strokeRange
         : Number(input.strokeRange),
+    globalStrokeMin:
+      input.globalStrokeMin === undefined
+        ? motionConfig.globalStrokeMin
+        : Number(input.globalStrokeMin),
+    globalStrokeMax:
+      input.globalStrokeMax === undefined
+        ? motionConfig.globalStrokeMax
+        : Number(input.globalStrokeMax),
     speedMin:
       input.speedMin === undefined ? motionConfig.speedMin : Number(input.speedMin),
     speedMax:
@@ -112,6 +122,12 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.speedMin)) {
     throw new Error("speedMin must be a number between 0 and 1");
   }
+  if (!Number.isFinite(next.globalStrokeMin)) {
+    throw new Error("globalStrokeMin must be a number between 0 and 1");
+  }
+  if (!Number.isFinite(next.globalStrokeMax)) {
+    throw new Error("globalStrokeMax must be a number between 0 and 1");
+  }
   if (!Number.isFinite(next.speedMax)) {
     throw new Error("speedMax must be a number between 0 and 1");
   }
@@ -126,6 +142,8 @@ function sanitizeMotionConfig(input) {
   }
 
   next.strokeRange = clamp01(next.strokeRange);
+  next.globalStrokeMin = clamp01(next.globalStrokeMin);
+  next.globalStrokeMax = clamp01(next.globalStrokeMax);
   next.speedMin = clamp01(next.speedMin);
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
@@ -136,6 +154,11 @@ function sanitizeMotionConfig(input) {
     const tmp = next.speedMin;
     next.speedMin = next.speedMax;
     next.speedMax = tmp;
+  }
+  if (next.globalStrokeMax < next.globalStrokeMin) {
+    const tmp = next.globalStrokeMin;
+    next.globalStrokeMin = next.globalStrokeMax;
+    next.globalStrokeMax = tmp;
   }
 
   return next;
@@ -267,6 +290,52 @@ app.post("/motion", async (req, res) => {
       error: error instanceof Error ? error.message : String(error)
     });
   }
+});
+
+app.post("/preview-motion", (req, res) => {
+  const text = String(req.body?.text ?? "");
+  if (!text.trim()) {
+    return res.status(400).json({ error: "Missing text" });
+  }
+
+  let motion;
+  try {
+    motion = parseMotion(text, { strictTag: strictMotionTag });
+    // eslint-disable-next-line no-console
+    console.log(
+      `[preview] style=${motion.style} depth=${motion.depth} speed=${motion.speed.toFixed(3)} durationMs=${motion.durationMs} text=${JSON.stringify(text)}`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[preview] error=${JSON.stringify(message)} text=${JSON.stringify(text)}`
+    );
+    return res.status(400).json({
+      accepted: false,
+      error: message
+    });
+  }
+
+  const runMotion = applySafeModeToMotion(motion, motionConfig);
+  return res.json({
+    accepted: true,
+    simulated: true,
+    strictMotionTag,
+    motion: runMotion,
+    configSnapshot: {
+      speedMin: motionConfig.speedMin,
+      speedMax: motionConfig.speedMax,
+      strokeRange: motionConfig.strokeRange,
+      globalStrokeMin: motionConfig.globalStrokeMin,
+      globalStrokeMax: motionConfig.globalStrokeMax,
+      minimumAllowedStroke: motionConfig.minimumAllowedStroke,
+      safeMode: motionConfig.safeMode,
+      safeMaxSpeed: motionConfig.safeMaxSpeed,
+      safeMaxDurationMs: motionConfig.safeMaxDurationMs,
+      holdUntilNextCommand: motionConfig.holdUntilNextCommand
+    }
+  });
 });
 
 const server = app.listen(port, () => {
