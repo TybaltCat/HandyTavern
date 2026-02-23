@@ -60,6 +60,110 @@
   flex: 1;
 }
 
+.tavernplug-global-range {
+  position: relative;
+  height: 28px;
+  --range-min: 0%;
+  --range-max: 100%;
+}
+
+.tavernplug-global-range::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 4px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--SmartThemeBorderColor) 55%, transparent);
+}
+
+.tavernplug-global-range::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: var(--range-min);
+  width: calc(var(--range-max) - var(--range-min));
+  height: 6px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: #3da9fc;
+}
+
+.tavernplug-global-range input[type="range"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+}
+
+.tavernplug-global-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: #fff;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.tavernplug-global-range input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+  background: #fff;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.tavernplug-global-range input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: transparent;
+  border: 0;
+}
+
+.tavernplug-global-range input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: transparent;
+  border: 0;
+}
+
+.tavernplug-global-range input[type="range"]::-moz-range-progress {
+  background: transparent;
+}
+
+.tavernplug-global-range .tavernplug-range-min {
+  z-index: 3;
+}
+
+.tavernplug-global-range .tavernplug-range-max {
+  z-index: 4;
+}
+
+.tavernplug-global-range .tavernplug-range-min:focus::-webkit-slider-thumb,
+.tavernplug-global-range .tavernplug-range-max:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(61, 169, 252, 0.25);
+}
+
+.tavernplug-global-range .tavernplug-range-min:focus::-moz-range-thumb,
+.tavernplug-global-range .tavernplug-range-max:focus::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgba(61, 169, 252, 0.25);
+}
+
+.tavernplug-global-range-value {
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
 .tavernplug-step-btn {
   min-width: 48px;
 }
@@ -75,6 +179,23 @@
   background: #b32020;
   border-color: #b32020;
   color: #fff;
+}
+
+.tavernplug-quick-stop {
+  background: #b32020;
+  border-color: #b32020;
+  color: #fff;
+}
+
+.tavernplug-quick-stop-inline {
+  margin-left: 8px;
+}
+
+.tavernplug-quick-stop-floating {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 9999;
 }
 
 .tavernplug-status {

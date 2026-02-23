@@ -79,6 +79,7 @@ let preTestHoldSetting = null;
 let patternIntervalHandle = null;
 let activePatternName = null;
 let patternStep = 0;
+let quickStopRetryHandle = null;
 
 function clampPercent(value) {
   const num = Number(value);
@@ -179,11 +180,28 @@ function messageHasMotionTag(text) {
   return /\[motion:\s*[^\]]+\]/i.test(text);
 }
 
+function shouldSkipMessageText(text) {
+  const value = String(text ?? "");
+  return /\bclothes guide:/i.test(value) || /\[ooc:/i.test(value);
+}
+
 function findSettingsContainer() {
   return (
     document.querySelector("#extensions_settings") ||
     document.querySelector("#extensions_settings2") ||
     document.querySelector(".extensions_settings")
+  );
+}
+
+function findQuickStopContainer() {
+  return (
+    document.querySelector("#send_form") ||
+    document.querySelector("#chat_form") ||
+    document.querySelector("#send_textarea")?.closest("form") ||
+    document.querySelector("#send_textarea")?.parentElement ||
+    document.querySelector(".send_form") ||
+    document.querySelector(".chat_input") ||
+    null
   );
 }
 
@@ -244,6 +262,11 @@ async function syncConfig() {
 async function sendMotionIfNeeded(message) {
   if (!settings.autoSend || !message) return;
   if (message.id <= lastSentMessageId) return;
+  if (shouldSkipMessageText(message.text)) {
+    lastSentMessageId = message.id;
+    setStatus(`Skipped message ${message.id} (filtered)`);
+    return;
+  }
   if (settings.strictTagOnly && !messageHasMotionTag(message.text)) return;
 
   try {
@@ -348,6 +371,10 @@ async function handleEmergencyStop() {
   } catch (error) {
     setStatus(`Stop error: ${error.message}`);
   }
+}
+
+async function handleQuickEmergencyStop() {
+  await handleEmergencyStop();
 }
 
 async function startTestMode() {
@@ -627,10 +654,6 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
-      <label>Message Check Interval (ms)</label>
-      <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
-    </div>
-    <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
       <div class="tavernplug-global-range">
         <input class="tavernplug-range-min" type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
@@ -662,6 +685,10 @@ function renderSettingsPanel() {
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
     </div>
     <div class="tavernplug-advanced-body" style="display:none;">
+    <div class="tavernplug-row">
+      <label>Message Check Interval (ms)</label>
+      <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
+    </div>
     <div class="tavernplug-row">
       <label>Stroke Range (0-100)</label>
       <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
@@ -942,6 +969,41 @@ function ensurePanelMounted() {
   }
 }
 
+function mountQuickStopButton() {
+  if (document.querySelector(`#${EXTENSION_NAME}-quick-stop`)) return true;
+
+  const button = document.createElement("button");
+  button.id = `${EXTENSION_NAME}-quick-stop`;
+  button.type = "button";
+  button.className = "menu_button tavernplug-quick-stop";
+  button.textContent = "Emergency Stop";
+  button.title = "Immediate stop for Handy motion";
+  button.addEventListener("click", () => {
+    void handleQuickEmergencyStop();
+  });
+
+  const container = findQuickStopContainer();
+  if (container) {
+    button.classList.add("tavernplug-quick-stop-inline");
+    container.append(button);
+    return true;
+  }
+
+  button.classList.add("tavernplug-quick-stop-floating");
+  document.body.append(button);
+  return true;
+}
+
+function ensureQuickStopMounted() {
+  mountQuickStopButton();
+  if (!quickStopRetryHandle) {
+    quickStopRetryHandle = setInterval(() => {
+      if (!document.body) return;
+      mountQuickStopButton();
+    }, 1500);
+  }
+}
+
 function startPolling() {
   if (pollHandle) return;
   const intervalMs = Math.max(500, Math.min(60000, Number(settings.pollIntervalMs) || 3000));
@@ -966,6 +1028,7 @@ function init() {
     return;
   }
   ensurePanelMounted();
+  ensureQuickStopMounted();
   startPolling();
   void syncConfig();
 }
