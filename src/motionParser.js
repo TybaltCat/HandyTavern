@@ -480,6 +480,37 @@ export function parseMotion(text, options = {}) {
   return parseRelaxedMotion(text);
 }
 
+export function hasMotionIntent(text, options = {}) {
+  const strictTag = options.strictTag ?? true;
+  const source = String(text ?? "");
+  if (!source.trim()) return false;
+
+  if (strictTag) {
+    return /\[motion:\s*[^\]]+\]/i.test(source);
+  }
+
+  const lower = source.toLowerCase();
+  const hasExplicitStyle = /\b(gentle|brisk|normal|hard|intense|rough)\b/i.test(lower);
+  const hasExplicitDepth = /\b(tip|middle|full|deep)\b/i.test(lower);
+  const hasExplicitSpeed = /\bspeed\s*[:=]?\s*\d+(?:\.\d+)?%?\b/i.test(lower);
+  const hasExplicitDuration = /\b(?:for|duration)\s*[:=]?\s*\d+(?:\.\d+)?(?:ms|s|sec|secs|second|seconds)\b/i.test(lower);
+  const hasTierOrBoost =
+    detectIntensityTier(source) !== "none"
+    || detectContextBoost(source).total > 0
+    || computeAnatomicalBoost(source) > 0
+    || hasFasterDeeperPhrase(source);
+  const hasPatternSignal = parseRelaxedPatternTrigger(source) !== null;
+
+  return (
+    hasExplicitStyle
+    || hasExplicitDepth
+    || hasExplicitSpeed
+    || hasExplicitDuration
+    || hasTierOrBoost
+    || hasPatternSignal
+  );
+}
+
 export function parsePatternTrigger(text, options = {}) {
   const strictTag = options.strictTag ?? true;
 
@@ -553,6 +584,7 @@ export function getMotionDebug(text, options = {}) {
 
   return {
     mode: "relaxed",
+    hasIntent: hasMotionIntent(source, { strictTag: false }),
     tier: detectIntensityTier(source),
     contextBoost: detectContextBoost(source).total,
     fasterDeeper: hasFasterDeeperPhrase(source),

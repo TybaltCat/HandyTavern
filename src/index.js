@@ -1,6 +1,11 @@
 import "dotenv/config";
 import express from "express";
-import { getMotionDebug, parseMotion, parsePatternTrigger } from "./motionParser.js";
+import {
+  getMotionDebug,
+  hasMotionIntent,
+  parseMotion,
+  parsePatternTrigger
+} from "./motionParser.js";
 import { HandyController } from "./handyController.js";
 
 const app = express();
@@ -250,7 +255,7 @@ function logMotionDebug(text) {
 
   // eslint-disable-next-line no-console
   console.log(
-    `[detect] mode=relaxed tier=${debug.tier} style=${debug.inferredStyle} depth=${debug.inferredDepth} pattern=${debug.inferredPattern ?? "-"} boost=${Number(debug.anatomicalBoost ?? 0).toFixed(2)} context=${Number(debug.contextBoost ?? 0)} fasterDeeper=${Boolean(debug.fasterDeeper)}`
+    `[detect] mode=relaxed intent=${Boolean(debug.hasIntent)} tier=${debug.tier} style=${debug.inferredStyle} depth=${debug.inferredDepth} pattern=${debug.inferredPattern ?? "-"} boost=${Number(debug.anatomicalBoost ?? 0).toFixed(2)} context=${Number(debug.contextBoost ?? 0)} fasterDeeper=${Boolean(debug.fasterDeeper)}`
   );
 }
 
@@ -575,6 +580,15 @@ app.post("/motion", async (req, res) => {
         error: error instanceof Error ? error.message : String(error)
       });
     }
+  }
+
+  if (!hasMotionIntent(text, { strictTag: strictMotionTagRuntime })) {
+    return res.json({
+      accepted: true,
+      simulated: !enabled,
+      skipped: true,
+      reason: "No motion intent detected"
+    });
   }
 
   let motion;
