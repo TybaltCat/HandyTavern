@@ -182,6 +182,24 @@ function deterministicChance(text, salt, threshold) {
   return normalized < threshold;
 }
 
+function shouldAutoTriggerPattern(text, inferredPattern) {
+  if (!inferredPattern) return false;
+  const tier = detectIntensityTier(text);
+  const context = detectContextBoost(text).total;
+  const patternHint = /\b(pattern|mode|wave|pulse|ramp|random|tease|edging|burst|ladder|stutter|climax)\b/i.test(
+    String(text ?? "")
+  );
+
+  let probability = 0.2;
+  if (tier === "medium") probability = 0.3;
+  if (tier === "high") probability = 0.4;
+  if (context > 0) probability += Math.min(0.15, context * 0.03);
+  if (patternHint) probability += 0.2;
+
+  const bounded = Math.max(0.05, Math.min(0.8, probability));
+  return deterministicChance(text, `auto-pattern-${inferredPattern}`, bounded);
+}
+
 function maybePickMotifByTier(text) {
   const tier = detectIntensityTier(text);
   const lower = String(text ?? "").toLowerCase();
@@ -551,7 +569,10 @@ function parseRelaxedPatternTrigger(text) {
   const durationMatch = lower.match(/\b(?:duration|for)\s*[:=]?\s*(\d+(?:\.\d+)?(?:ms|s|sec|secs|second|seconds)?)\b/i);
   const speedMatch = lower.match(/\bspeed\s*[:=]?\s*(\d+(?:\.\d+)?%?)\b/i);
 
-  const pattern = explicit ? parsePatternName(explicit[1]) : inferPatternFromScoring(text);
+  const inferred = inferPatternFromScoring(text);
+  const pattern = explicit
+    ? parsePatternName(explicit[1])
+    : shouldAutoTriggerPattern(text, inferred) ? inferred : null;
   if (!pattern) return null;
 
   return {

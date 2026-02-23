@@ -2,11 +2,11 @@ const EXTENSION_NAME = "tavernplug-handy";
 // Add new extension-level settings defaults here.
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
-  pollIntervalMs: 3000,
+  pollIntervalMs: 2000,
   autoSend: true,
-  strictTagOnly: true,
+  strictTagOnly: false,
   advancedOpen: false,
-  holdUntilNextCommand: false,
+  holdUntilNextCommand: true,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
   safeMode: false,
@@ -20,10 +20,10 @@ const DEFAULTS = {
   testSpeedIntensePct: 90,
   handyConnectionKey: "",
   globalStrokeMinPct: 0,
-  globalStrokeMaxPct: 100,
+  globalStrokeMaxPct: 75,
   strokeRange: 100,
   speedMin: 0,
-  speedMax: 100,
+  speedMax: 75,
   minimumAllowedStroke: 0
 };
 
@@ -361,6 +361,13 @@ function onInputChange(event) {
       void sendModeTest(testModeStyle, testModeDepth);
     }, 150);
   }
+
+  // Re-check latest assistant message immediately after config changes,
+  // so users do not have to wait for the next polling tick.
+  setTimeout(() => {
+    const latest = getAssistantMessageFromContext();
+    void sendMotionIfNeeded(latest);
+  }, 120);
 }
 
 async function handleEmergencyStop() {
