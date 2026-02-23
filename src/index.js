@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import { parseMotion } from "./motionParser.js";
+import { getMotionDebug, parseMotion, parsePatternTrigger } from "./motionParser.js";
 import { HandyController } from "./handyController.js";
 
 const app = express();
@@ -34,6 +34,14 @@ const controller = new HandyController({
 });
 
 let ready = false;
+const patternState = {
+  active: false,
+  name: null,
+  step: 0,
+  intervalHandle: null,
+  stopHandle: null,
+  frameBusy: false
+};
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
@@ -187,6 +195,189 @@ function runMotionAsync(runMotion, config) {
     });
 }
 
+function logMotionDebug(text) {
+  const debug = getMotionDebug(text, { strictTag: strictMotionTag });
+  if (debug.mode === "strict") {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[detect] mode=strict hasTag=${Boolean(debug.hasTag)} style=${debug.style ?? "-"} depth=${debug.depth ?? "-"} speed=${debug.speed ?? "-"} pattern=${debug.pattern ?? "-"}`
+    );
+    return;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `[detect] mode=relaxed tier=${debug.tier} style=${debug.inferredStyle} depth=${debug.inferredDepth} pattern=${debug.inferredPattern ?? "-"} boost=${Number(debug.anatomicalBoost ?? 0).toFixed(2)} context=${Number(debug.contextBoost ?? 0)} fasterDeeper=${Boolean(debug.fasterDeeper)}`
+  );
+}
+
+function nextPatternFrame(name, step) {
+  if (name === "wave") {
+    const cycle = [
+      ["gentle", "middle"],
+      ["brisk", "middle"],
+      ["normal", "middle"],
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["normal", "middle"],
+      ["brisk", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "pulse") {
+    if (step % 4 === 3) return { style: "intense", depth: "deep" };
+    return { style: "normal", depth: "middle" };
+  }
+
+  if (name === "ramp") {
+    const cycle = ["gentle", "brisk", "normal", "hard", "intense"];
+    return { style: cycle[step % cycle.length], depth: "middle" };
+  }
+
+  if (name === "tease_hold") {
+    const cycle = [
+      ["gentle", "tip"],
+      ["gentle", "tip"],
+      ["gentle", "middle"],
+      ["gentle", "tip"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "edging_ramp") {
+    const cycle = [
+      ["gentle", "middle"],
+      ["brisk", "middle"],
+      ["normal", "full"],
+      ["hard", "full"],
+      ["gentle", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "pulse_bursts") {
+    const cycle = [
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["normal", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "depth_ladder") {
+    const cycle = [
+      ["normal", "tip"],
+      ["normal", "middle"],
+      ["hard", "full"],
+      ["normal", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "stutter_break") {
+    if (step % 5 === 4) return { style: "gentle", depth: "middle" };
+    return { style: "hard", depth: "full" };
+  }
+
+  if (name === "climax_window") {
+    const cycle = [
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["brisk", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  const styles = ["gentle", "brisk", "normal", "hard", "intense"];
+  const depths = ["tip", "middle", "full", "deep"];
+  return {
+    style: styles[Math.floor(Math.random() * styles.length)],
+    depth: depths[Math.floor(Math.random() * depths.length)]
+  };
+}
+
+function stopPatternRunner() {
+  if (patternState.intervalHandle) {
+    clearInterval(patternState.intervalHandle);
+    patternState.intervalHandle = null;
+  }
+  if (patternState.stopHandle) {
+    clearTimeout(patternState.stopHandle);
+    patternState.stopHandle = null;
+  }
+  patternState.active = false;
+  patternState.name = null;
+  patternState.step = 0;
+  patternState.frameBusy = false;
+}
+
+async function runPatternFrame(trigger) {
+  const frame = nextPatternFrame(trigger.pattern, patternState.step);
+  const rawMotion = {
+    style: frame.style,
+    depth: frame.depth,
+    speed: trigger.speed,
+    durationMs: Math.max(300, Math.round(trigger.intervalMs * 0.95))
+  };
+  const runMotion = applySafeModeToMotion(rawMotion, motionConfig);
+  // eslint-disable-next-line no-console
+  console.log(
+    `[pattern] frame pattern=${trigger.pattern} step=${patternState.step} style=${runMotion.style} depth=${runMotion.depth} speed=${runMotion.speed.toFixed(3)} durationMs=${runMotion.durationMs}`
+  );
+  await controller.runMotion(runMotion, motionConfig, {
+    stopPreviousOnNewMotion: true,
+    holdUntilNextCommand: false
+  });
+}
+
+async function startPatternRunner(trigger) {
+  stopPatternRunner();
+  patternState.active = true;
+  patternState.name = trigger.pattern;
+  patternState.step = 0;
+
+  const intervalMs = Math.max(300, Math.min(15000, Math.round(trigger.intervalMs)));
+  const totalDurationMs = Math.max(1000, Math.round(trigger.durationMs));
+
+  const tick = async () => {
+    if (!patternState.active || patternState.frameBusy) return;
+    patternState.frameBusy = true;
+    try {
+      await runPatternFrame(trigger);
+    } finally {
+      patternState.frameBusy = false;
+    }
+  };
+
+  await tick();
+  patternState.intervalHandle = setInterval(() => {
+    patternState.step += 1;
+    void tick();
+  }, intervalMs);
+
+  patternState.stopHandle = setTimeout(async () => {
+    stopPatternRunner();
+    try {
+      await controller.stopNow({ cancelPending: true });
+    } catch (_error) {
+      // Best-effort cleanup when pattern window expires.
+    }
+    // eslint-disable-next-line no-console
+    console.log("[pattern] stopped after duration window");
+  }, totalDurationMs);
+}
+
 async function ensureReady() {
   if (!enabled) return;
   if (ready && controller.client?.connected === true) return;
@@ -221,6 +412,7 @@ app.post("/config", (req, res) => {
 
 app.post("/emergency-stop", async (_req, res) => {
   try {
+    stopPatternRunner();
     await ensureReady();
     if (enabled) {
       await controller.stopNow({ cancelPending: true });
@@ -238,6 +430,64 @@ app.post("/motion", async (req, res) => {
   const text = String(req.body?.text ?? "");
   if (!text.trim()) {
     return res.status(400).json({ error: "Missing text" });
+  }
+  logMotionDebug(text);
+
+  let patternTrigger = null;
+  try {
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console
+    console.error(`[pattern] error=${JSON.stringify(message)} text=${JSON.stringify(text)}`);
+    return res.status(400).json({
+      accepted: false,
+      error: message
+    });
+  }
+
+  if (patternTrigger) {
+    if (patternTrigger.stop) {
+      try {
+        stopPatternRunner();
+        await controller.stopNow({ cancelPending: true });
+        // eslint-disable-next-line no-console
+        console.log("[pattern] stop trigger received");
+        return res.json({
+          accepted: true,
+          simulated: !enabled,
+          pattern: { stop: true }
+        });
+      } catch (error) {
+        return res.status(500).json({
+          accepted: false,
+          pattern: { stop: true },
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    try {
+      await ensureReady();
+      if (enabled) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[pattern] start name=${patternTrigger.pattern} speed=${patternTrigger.speed.toFixed(3)} intervalMs=${patternTrigger.intervalMs} durationMs=${patternTrigger.durationMs}`
+        );
+        await startPatternRunner(patternTrigger);
+      }
+      return res.json({
+        accepted: true,
+        simulated: !enabled,
+        pattern: patternTrigger
+      });
+    } catch (error) {
+      return res.status(500).json({
+        accepted: false,
+        pattern: patternTrigger,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   let motion;
@@ -260,6 +510,7 @@ app.post("/motion", async (req, res) => {
 
   try {
     await ensureReady();
+    stopPatternRunner();
     const runMotion = applySafeModeToMotion(motion, motionConfig);
     if (enabled) {
       // eslint-disable-next-line no-console
@@ -296,6 +547,52 @@ app.post("/preview-motion", (req, res) => {
   const text = String(req.body?.text ?? "");
   if (!text.trim()) {
     return res.status(400).json({ error: "Missing text" });
+  }
+  logMotionDebug(text);
+
+  let patternTrigger = null;
+  try {
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // eslint-disable-next-line no-console
+    console.error(
+      `[preview] pattern error=${JSON.stringify(message)} text=${JSON.stringify(text)}`
+    );
+    return res.status(400).json({
+      accepted: false,
+      error: message
+    });
+  }
+
+  if (patternTrigger) {
+    if (patternTrigger.stop) {
+      return res.json({
+        accepted: true,
+        simulated: true,
+        strictMotionTag,
+        pattern: { stop: true }
+      });
+    }
+
+    return res.json({
+      accepted: true,
+      simulated: true,
+      strictMotionTag,
+      pattern: patternTrigger,
+      configSnapshot: {
+        speedMin: motionConfig.speedMin,
+        speedMax: motionConfig.speedMax,
+        strokeRange: motionConfig.strokeRange,
+        globalStrokeMin: motionConfig.globalStrokeMin,
+        globalStrokeMax: motionConfig.globalStrokeMax,
+        minimumAllowedStroke: motionConfig.minimumAllowedStroke,
+        safeMode: motionConfig.safeMode,
+        safeMaxSpeed: motionConfig.safeMaxSpeed,
+        safeMaxDurationMs: motionConfig.safeMaxDurationMs,
+        holdUntilNextCommand: motionConfig.holdUntilNextCommand
+      }
+    });
   }
 
   let motion;
@@ -353,6 +650,45 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
     const text = chunk.trim();
     if (!text) return;
 
+    let patternTrigger = null;
+    try {
+      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(
+        "pattern parse error:",
+        error instanceof Error ? error.message : String(error)
+      );
+      return;
+    }
+
+    if (patternTrigger) {
+      if (patternTrigger.stop) {
+        // eslint-disable-next-line no-console
+        console.log("pattern parsed:", patternTrigger);
+        stopPatternRunner();
+        try {
+          await controller.stopNow({ cancelPending: true });
+        } catch (_error) {
+          // Best-effort stop.
+        }
+        return;
+      }
+
+      // eslint-disable-next-line no-console
+      console.log("pattern parsed:", patternTrigger);
+      if (!enabled) return;
+
+      try {
+        await ensureReady();
+        await startPatternRunner(patternTrigger);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("pattern error:", error);
+      }
+      return;
+    }
+
     let motion;
     try {
       motion = parseMotion(text, { strictTag: strictMotionTag });
@@ -372,6 +708,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 
     try {
       await ensureReady();
+      stopPatternRunner();
       const runMotion = applySafeModeToMotion(motion, motionConfig);
       if (motionConfig.holdUntilNextCommand) {
         void runMotionAsync(runMotion, motionConfig);

@@ -13,8 +13,8 @@ const DEFAULTS = {
   safeMaxDurationMs: 4000,
   patternIntervalMs: 1800,
   testSpeedGentlePct: 20,
-  testSpeedBriskPct: 40,
-  testSpeedNormalPct: 55,
+  testSpeedBriskPct: 55,
+  testSpeedNormalPct: 40,
   testSpeedHardPct: 75,
   testSpeedIntensePct: 90,
   handyConnectionKey: "",
@@ -47,6 +47,11 @@ function saveSettings() {
 const extensionSettingsStore = getExtensionSettingsStore() ?? {};
 const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
+// Migrate older default profile where brisk was slower than normal.
+if (Number(settings.testSpeedBriskPct) === 40 && Number(settings.testSpeedNormalPct) === 55) {
+  settings.testSpeedBriskPct = 55;
+  settings.testSpeedNormalPct = 40;
+}
 normalizePercentSetting("strokeRange");
 normalizePercentSetting("speedMin");
 normalizePercentSetting("speedMax");
@@ -102,6 +107,58 @@ function updateModeStateLine() {
     `Test: ${testModeActive ? "ON" : "OFF"}`,
     `Pattern: ${activePatternName ?? "OFF"}`
   ].join(" | ");
+}
+
+function updateGlobalStrokeSlider(panel) {
+  if (!panel) return;
+  let min = clampPercent(settings.globalStrokeMinPct);
+  let max = clampPercent(settings.globalStrokeMaxPct);
+  if (max < min) {
+    const temp = min;
+    min = max;
+    max = temp;
+    settings.globalStrokeMinPct = min;
+    settings.globalStrokeMaxPct = max;
+  }
+
+  const minInput = panel.querySelector(`input[name="globalStrokeMinPct"]`);
+  const maxInput = panel.querySelector(`input[name="globalStrokeMaxPct"]`);
+  const valueEl = panel.querySelector(".tavernplug-global-range-value");
+  const track = panel.querySelector(".tavernplug-global-range");
+
+  if (minInput) minInput.value = String(min);
+  if (maxInput) maxInput.value = String(max);
+  if (valueEl) valueEl.textContent = `${min}% to ${max}%`;
+  if (track) {
+    track.style.setProperty("--range-min", `${min}%`);
+    track.style.setProperty("--range-max", `${max}%`);
+  }
+}
+
+function updateGlobalSpeedSlider(panel) {
+  if (!panel) return;
+  let min = clampPercent(settings.speedMin);
+  let max = clampPercent(settings.speedMax);
+  if (max < min) {
+    const temp = min;
+    min = max;
+    max = temp;
+    settings.speedMin = min;
+    settings.speedMax = max;
+  }
+
+  const minInput = panel.querySelector(`input[name="speedMin"]`);
+  const maxInput = panel.querySelector(`input[name="speedMax"]`);
+  const valueEl = panel.querySelector(".tavernplug-speed-range-value");
+  const track = panel.querySelector(".tavernplug-speed-range");
+
+  if (minInput) minInput.value = String(min);
+  if (maxInput) maxInput.value = String(max);
+  if (valueEl) valueEl.textContent = `${min}% to ${max}%`;
+  if (track) {
+    track.style.setProperty("--range-min", `${min}%`);
+    track.style.setProperty("--range-max", `${max}%`);
+  }
 }
 
 function setAdvancedOpen(panel, open) {
@@ -229,6 +286,12 @@ function onInputChange(event) {
   if (name === "globalStrokeMaxPct" && Number(settings.globalStrokeMaxPct) < Number(settings.globalStrokeMinPct)) {
     settings.globalStrokeMinPct = settings.globalStrokeMaxPct;
   }
+  if (name === "speedMin" && Number(settings.speedMin) > Number(settings.speedMax)) {
+    settings.speedMax = settings.speedMin;
+  }
+  if (name === "speedMax" && Number(settings.speedMax) < Number(settings.speedMin)) {
+    settings.speedMin = settings.speedMax;
+  }
   if (type === "number" && name === "patternIntervalMs") {
     settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
   }
@@ -245,6 +308,13 @@ function onInputChange(event) {
     "globalStrokeMinPct",
     "globalStrokeMaxPct"
   ].includes(name);
+  const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
+  if (name === "globalStrokeMinPct" || name === "globalStrokeMaxPct") {
+    updateGlobalStrokeSlider(panel);
+  }
+  if (name === "speedMin" || name === "speedMax") {
+    updateGlobalSpeedSlider(panel);
+  }
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
@@ -319,6 +389,68 @@ function nextPatternFrame(name, step) {
   if (name === "ramp") {
     const cycle = ["gentle", "brisk", "normal", "hard", "intense"];
     return { style: cycle[step % cycle.length], depth: "middle" };
+  }
+
+  if (name === "tease_hold") {
+    const cycle = [
+      ["gentle", "tip"],
+      ["gentle", "tip"],
+      ["gentle", "middle"],
+      ["gentle", "tip"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "edging_ramp") {
+    const cycle = [
+      ["gentle", "middle"],
+      ["brisk", "middle"],
+      ["normal", "full"],
+      ["hard", "full"],
+      ["gentle", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "pulse_bursts") {
+    const cycle = [
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["normal", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "depth_ladder") {
+    const cycle = [
+      ["normal", "tip"],
+      ["normal", "middle"],
+      ["hard", "full"],
+      ["normal", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "stutter_break") {
+    if (step % 5 === 4) return { style: "gentle", depth: "middle" };
+    return { style: "hard", depth: "full" };
+  }
+
+  if (name === "climax_window") {
+    const cycle = [
+      ["hard", "full"],
+      ["intense", "deep"],
+      ["intense", "deep"],
+      ["hard", "full"],
+      ["brisk", "middle"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
   }
 
   const styles = ["gentle", "brisk", "normal", "hard", "intense"];
@@ -486,20 +618,20 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
-      <label>Global Stroke Min (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
+      <label>Global Stroke Window (0-100)</label>
+      <div class="tavernplug-global-range">
+        <input type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
+        <input type="range" step="1" min="0" max="100" name="globalStrokeMaxPct" value="${settings.globalStrokeMaxPct}" />
+      </div>
+      <div class="tavernplug-global-range-value">${clampPercent(settings.globalStrokeMinPct)}% to ${clampPercent(settings.globalStrokeMaxPct)}%</div>
     </div>
     <div class="tavernplug-row">
-      <label>Global Stroke Max (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="globalStrokeMaxPct" value="${settings.globalStrokeMaxPct}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Speed Range Min (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="speedMin" value="${settings.speedMin}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Speed Range Max (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
+      <label>Global Speed Window (0-100)</label>
+      <div class="tavernplug-global-range tavernplug-speed-range">
+        <input type="range" step="1" min="0" max="100" name="speedMin" value="${settings.speedMin}" />
+        <input type="range" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
+      </div>
+      <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
     <div class="tavernplug-row">
       <label>Safe Max Speed (0-100)</label>
@@ -602,6 +734,12 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-pulse">Pulse</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-ramp">Ramp</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-random">Random</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-tease">Tease</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-edging">Edging</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-burst">Burst</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-ladder">Ladder</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-stutter">Stutter</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-climax">Climax</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-stop">Stop Pattern</button>
     </div>
     <div class="tavernplug-actions">
@@ -626,6 +764,9 @@ function renderSettingsPanel() {
 
   panel.querySelectorAll("input").forEach((input) => {
     input.addEventListener("change", onInputChange);
+    if (input.type === "range") {
+      input.addEventListener("input", onInputChange);
+    }
   });
   panel.querySelector(`#${EXTENSION_NAME}-test`)?.addEventListener("click", () => {
     void handleTestMotion();
@@ -686,6 +827,24 @@ function renderSettingsPanel() {
   panel.querySelector(`#${EXTENSION_NAME}-pattern-random`)?.addEventListener("click", () => {
     void startPatternMode("random");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-tease`)?.addEventListener("click", () => {
+    void startPatternMode("tease_hold");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-edging`)?.addEventListener("click", () => {
+    void startPatternMode("edging_ramp");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-burst`)?.addEventListener("click", () => {
+    void startPatternMode("pulse_bursts");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-ladder`)?.addEventListener("click", () => {
+    void startPatternMode("depth_ladder");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-stutter`)?.addEventListener("click", () => {
+    void startPatternMode("stutter_break");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-pattern-climax`)?.addEventListener("click", () => {
+    void startPatternMode("climax_window");
+  });
   panel.querySelector(`#${EXTENSION_NAME}-pattern-stop`)?.addEventListener("click", () => {
     stopPatternMode();
   });
@@ -740,6 +899,8 @@ function renderSettingsPanel() {
   });
   setAdvancedOpen(panel, settings.advancedOpen);
   setPanelCollapsed(panel, settings.panelCollapsed);
+  updateGlobalStrokeSlider(panel);
+  updateGlobalSpeedSlider(panel);
 
   container.append(panel);
   modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);
