@@ -559,21 +559,12 @@ app.post("/motion", async (req, res) => {
   }
 
   if (!hasMotionIntent(text, { strictTag: strictMotionTagRuntime })) {
-    try {
-      await ensureReady();
-      if (enabled) {
-        cancelMotionRunner();
-        await controller.parkAtZero();
-      }
-    } catch (_error) {
-      // Best-effort idle park.
-    }
     return res.json({
       accepted: true,
       simulated: !enabled,
       skipped: true,
       reason: "No motion intent detected",
-      parked: true
+      continuedPreviousMotion: true
     });
   }
 
