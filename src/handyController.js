@@ -15,11 +15,6 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
-function easeInOutSine(value) {
-  const t = clamp01(value);
-  return -(Math.cos(Math.PI * t) - 1) / 2;
-}
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -199,9 +194,9 @@ export class HandyController {
     const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
     const minStroke = applyGlobalStrokeWindow(localMin, motionConfig);
     const maxStroke = Math.max(minStroke + 0.05, strokePosition);
-    // More aggressive cycle timing so upper speed values feel substantially faster.
-    // 0.0 -> ~320ms half-cycle, 1.0 -> ~45ms half-cycle.
-    const halfCycleMs = Math.max(45, Math.round(320 - remapped * 275));
+    // Smoother timing profile with a higher floor to reduce harsh direction changes.
+    // 0.0 -> ~300ms half-cycle, 1.0 -> ~70ms half-cycle.
+    const halfCycleMs = Math.max(70, Math.round(300 - remapped * 230));
 
     if (stopPreviousOnNewMotion) {
       await this.stopNow();
@@ -210,23 +205,13 @@ export class HandyController {
 
     if (typeof device.linear === "function") {
       let toMax = true;
-      let currentPos = minStroke;
       const end = Date.now() + motion.durationMs;
       while (holdUntilNextCommand || Date.now() < end) {
         if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
         const remaining = holdUntilNextCommand ? halfCycleMs : end - Date.now();
-        const stepMs = Math.max(25, Math.min(halfCycleMs, remaining));
+        const stepMs = Math.max(40, Math.min(halfCycleMs, remaining));
         const target = toMax ? maxStroke : minStroke;
-        const segmentCount = remapped > 0.8 ? 2 : 3;
-        const segmentMs = Math.max(20, Math.round(stepMs / segmentCount));
-
-        for (let index = 1; index <= segmentCount; index += 1) {
-          if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
-          const progress = easeInOutSine(index / segmentCount);
-          const interpolated = currentPos + (target - currentPos) * progress;
-          await sendLinearStep(device, segmentMs, interpolated);
-        }
-        currentPos = target;
+        await sendLinearStep(device, stepMs, target);
         toMax = !toMax;
       }
       await this.stopNow();
