@@ -49,6 +49,10 @@ let lastSentMessageId = -1;
 let pollHandle = null;
 let statusEl = null;
 let panelRetryHandle = null;
+let testModeActive = false;
+let testModeStyle = "normal";
+let testModeDepth = "middle";
+let preTestHoldSetting = null;
 
 function clampPercent(value) {
   const num = Number(value);
@@ -160,9 +164,21 @@ function onInputChange(event) {
   if (type === "number" && name === "safeMaxDurationMs") {
     settings[name] = Math.max(250, Number(settings[name]) || 4000);
   }
+  const isLiveMotionControl = [
+    "strokeRange",
+    "minimumAllowedStroke",
+    "speedMin",
+    "speedMax"
+  ].includes(name);
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
+  if (testModeActive && isLiveMotionControl) {
+    // Re-send current mode so live adjustments apply immediately.
+    setTimeout(() => {
+      void sendModeTest(testModeStyle, testModeDepth);
+    }, 150);
+  }
 }
 
 async function handleEmergencyStop() {
@@ -175,11 +191,31 @@ async function handleEmergencyStop() {
 }
 
 async function handleTestMotion() {
-  // Adjust this canned tag to test different parser/device behavior quickly.
-  const testTag = "[motion: style=normal speed=55 depth=middle duration=3s]";
+  const testButton = document.querySelector(`#${EXTENSION_NAME}-test`);
+
+  if (!testModeActive) {
+    preTestHoldSetting = Boolean(settings.holdUntilNextCommand);
+    settings.holdUntilNextCommand = true;
+    saveSettings();
+    await syncConfig();
+    testModeActive = true;
+    if (testButton) testButton.textContent = "Test Mode Stop";
+    await sendModeTest(testModeStyle, testModeDepth);
+    setStatus("Test mode started");
+    return;
+  }
+
   try {
-    await postJson("/motion", { text: testTag });
-    setStatus("Test motion sent");
+    await postJson("/emergency-stop", {});
+    if (preTestHoldSetting !== null) {
+      settings.holdUntilNextCommand = preTestHoldSetting;
+      preTestHoldSetting = null;
+      saveSettings();
+      await syncConfig();
+    }
+    testModeActive = false;
+    if (testButton) testButton.textContent = "Test Mode Start";
+    setStatus("Test mode stopped");
   } catch (error) {
     setStatus(`Test error: ${error.message}`);
   }
@@ -193,6 +229,8 @@ function currentTestSpeed() {
 }
 
 async function sendModeTest(style, depth) {
+  testModeStyle = style;
+  testModeDepth = depth;
   const speed = currentTestSpeed();
   const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=3s]`;
   try {
@@ -294,7 +332,7 @@ function renderSettingsPanel() {
       </label>
     </div>
     <div class="tavernplug-actions">
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Motion</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Mode Start</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-gentle">Gentle</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-normal">Normal</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-rough">Rough</button>
