@@ -24,7 +24,7 @@ app.use(express.json({ limit: "256kb" }));
 
 const port = Number(process.env.PORT ?? 8787);
 const enabled = String(process.env.ENABLE_DEVICE ?? "false").toLowerCase() === "true";
-const strictMotionTag =
+let strictMotionTagRuntime =
   String(process.env.STRICT_MOTION_TAG ?? "true").toLowerCase() === "true";
 
 const controller = new HandyController({
@@ -57,7 +57,8 @@ let motionConfig = {
   holdUntilNextCommand:
     String(process.env.HOLD_UNTIL_NEXT_COMMAND ?? "false").toLowerCase() === "true",
   stopPreviousOnNewMotion:
-    String(process.env.STOP_PREVIOUS_ON_NEW_MOTION ?? "true").toLowerCase() === "true"
+    String(process.env.STOP_PREVIOUS_ON_NEW_MOTION ?? "true").toLowerCase() === "true",
+  strictMotionTag: strictMotionTagRuntime
 };
 
 function clamp01(value) {
@@ -121,7 +122,11 @@ function sanitizeMotionConfig(input) {
     stopPreviousOnNewMotion:
       input.stopPreviousOnNewMotion === undefined
         ? motionConfig.stopPreviousOnNewMotion
-        : parseBoolean(input.stopPreviousOnNewMotion, motionConfig.stopPreviousOnNewMotion)
+        : parseBoolean(input.stopPreviousOnNewMotion, motionConfig.stopPreviousOnNewMotion),
+    strictMotionTag:
+      input.strictMotionTag === undefined
+        ? motionConfig.strictMotionTag
+        : parseBoolean(input.strictMotionTag, motionConfig.strictMotionTag)
   };
 
   if (!Number.isFinite(next.strokeRange)) {
@@ -196,7 +201,7 @@ function runMotionAsync(runMotion, config) {
 }
 
 function logMotionDebug(text) {
-  const debug = getMotionDebug(text, { strictTag: strictMotionTag });
+  const debug = getMotionDebug(text, { strictTag: strictMotionTagRuntime });
   if (debug.mode === "strict") {
     // eslint-disable-next-line no-console
     console.log(
@@ -394,13 +399,14 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/config", (_req, res) => {
-  res.json({ ok: true, config: motionConfig });
+  res.json({ ok: true, config: { ...motionConfig, strictMotionTag: strictMotionTagRuntime } });
 });
 
 app.post("/config", (req, res) => {
   try {
     // Central place where extension UI values are validated before use.
     motionConfig = sanitizeMotionConfig(req.body ?? {});
+    strictMotionTagRuntime = motionConfig.strictMotionTag;
     return res.json({ ok: true, config: motionConfig });
   } catch (error) {
     return res.status(400).json({
@@ -435,7 +441,7 @@ app.post("/motion", async (req, res) => {
 
   let patternTrigger = null;
   try {
-    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -493,7 +499,7 @@ app.post("/motion", async (req, res) => {
   let motion;
   try {
     // Toggle strict tag requirements via STRICT_MOTION_TAG env.
-    motion = parseMotion(text, { strictTag: strictMotionTag });
+    motion = parseMotion(text, { strictTag: strictMotionTagRuntime });
     // eslint-disable-next-line no-console
     console.log(
       `[parse] style=${motion.style} depth=${motion.depth} speed=${motion.speed.toFixed(3)} durationMs=${motion.durationMs} text=${JSON.stringify(text)}`
@@ -552,7 +558,7 @@ app.post("/preview-motion", (req, res) => {
 
   let patternTrigger = null;
   try {
-    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -570,7 +576,7 @@ app.post("/preview-motion", (req, res) => {
       return res.json({
         accepted: true,
         simulated: true,
-        strictMotionTag,
+        strictMotionTag: strictMotionTagRuntime,
         pattern: { stop: true }
       });
     }
@@ -578,7 +584,7 @@ app.post("/preview-motion", (req, res) => {
     return res.json({
       accepted: true,
       simulated: true,
-      strictMotionTag,
+      strictMotionTag: strictMotionTagRuntime,
       pattern: patternTrigger,
       configSnapshot: {
         speedMin: motionConfig.speedMin,
@@ -597,7 +603,7 @@ app.post("/preview-motion", (req, res) => {
 
   let motion;
   try {
-    motion = parseMotion(text, { strictTag: strictMotionTag });
+    motion = parseMotion(text, { strictTag: strictMotionTagRuntime });
     // eslint-disable-next-line no-console
     console.log(
       `[preview] style=${motion.style} depth=${motion.depth} speed=${motion.speed.toFixed(3)} durationMs=${motion.durationMs} text=${JSON.stringify(text)}`
@@ -618,7 +624,7 @@ app.post("/preview-motion", (req, res) => {
   return res.json({
     accepted: true,
     simulated: true,
-    strictMotionTag,
+    strictMotionTag: strictMotionTagRuntime,
     motion: runMotion,
     configSnapshot: {
       speedMin: motionConfig.speedMin,
@@ -652,7 +658,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 
     let patternTrigger = null;
     try {
-      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTag });
+      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error(
@@ -691,7 +697,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 
     let motion;
     try {
-      motion = parseMotion(text, { strictTag: strictMotionTag });
+      motion = parseMotion(text, { strictTag: strictMotionTagRuntime });
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error(

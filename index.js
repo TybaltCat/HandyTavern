@@ -2,6 +2,7 @@ const EXTENSION_NAME = "tavernplug-handy";
 // Add new extension-level settings defaults here.
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
+  pollIntervalMs: 3000,
   autoSend: true,
   strictTagOnly: true,
   advancedOpen: false,
@@ -227,6 +228,7 @@ async function syncConfig() {
     safeMode: Boolean(settings.safeMode),
     safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
     safeMaxDurationMs: Math.max(250, Number(settings.safeMaxDurationMs) || 4000),
+    strictMotionTag: Boolean(settings.strictTagOnly),
     holdUntilNextCommand: Boolean(settings.holdUntilNextCommand),
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
   };
@@ -295,6 +297,9 @@ function onInputChange(event) {
   if (type === "number" && name === "patternIntervalMs") {
     settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
   }
+  if (type === "number" && name === "pollIntervalMs") {
+    settings[name] = Math.max(500, Math.min(60000, Number(settings[name]) || 3000));
+  }
   const isLiveMotionControl = [
     "strokeRange",
     "minimumAllowedStroke",
@@ -322,6 +327,10 @@ function onInputChange(event) {
     setTimeout(() => {
       void startPatternMode(activePatternName);
     }, 150);
+  }
+  if (name === "pollIntervalMs") {
+    restartPolling();
+    setStatus(`Poll interval set to ${settings.pollIntervalMs}ms`);
   }
   if (testModeActive && isLiveMotionControl) {
     // Re-send current mode so live adjustments apply immediately.
@@ -618,18 +627,22 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
+      <label>Message Check Interval (ms)</label>
+      <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
+    </div>
+    <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
       <div class="tavernplug-global-range">
-        <input type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
-        <input type="range" step="1" min="0" max="100" name="globalStrokeMaxPct" value="${settings.globalStrokeMaxPct}" />
+        <input class="tavernplug-range-min" type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
+        <input class="tavernplug-range-max" type="range" step="1" min="0" max="100" name="globalStrokeMaxPct" value="${settings.globalStrokeMaxPct}" />
       </div>
       <div class="tavernplug-global-range-value">${clampPercent(settings.globalStrokeMinPct)}% to ${clampPercent(settings.globalStrokeMaxPct)}%</div>
     </div>
     <div class="tavernplug-row">
       <label>Global Speed Window (0-100)</label>
       <div class="tavernplug-global-range tavernplug-speed-range">
-        <input type="range" step="1" min="0" max="100" name="speedMin" value="${settings.speedMin}" />
-        <input type="range" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
+        <input class="tavernplug-range-min" type="range" step="1" min="0" max="100" name="speedMin" value="${settings.speedMin}" />
+        <input class="tavernplug-range-max" type="range" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
       </div>
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
@@ -931,10 +944,19 @@ function ensurePanelMounted() {
 
 function startPolling() {
   if (pollHandle) return;
+  const intervalMs = Math.max(500, Math.min(60000, Number(settings.pollIntervalMs) || 3000));
   pollHandle = setInterval(() => {
     const message = getAssistantMessageFromContext();
     void sendMotionIfNeeded(message);
-  }, 800);
+  }, intervalMs);
+}
+
+function restartPolling() {
+  if (pollHandle) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
+  startPolling();
 }
 
 function init() {
