@@ -389,7 +389,7 @@ async function runPatternFrame(trigger) {
   });
 }
 
-async function startPatternRunner(trigger) {
+async function startPatternRunner(trigger, options = {}) {
   stopPatternRunner();
   patternState.active = true;
   patternState.name = trigger.pattern;
@@ -397,6 +397,7 @@ async function startPatternRunner(trigger) {
 
   const intervalMs = Math.max(300, Math.min(15000, Math.round(trigger.intervalMs)));
   const totalDurationMs = Math.max(1000, Math.round(trigger.durationMs));
+  const repeatWindows = options.repeatWindows ?? true;
 
   const tick = async () => {
     if (!patternState.active || patternState.frameBusy) return;
@@ -417,6 +418,19 @@ async function startPatternRunner(trigger) {
   const scheduleWindowReset = () => {
     patternState.stopHandle = setTimeout(() => {
       if (!patternState.active) return;
+      if (!repeatWindows) {
+        stopPatternRunner();
+        void (async () => {
+          try {
+            await controller.parkAtZero();
+          } catch (_error) {
+            // Best-effort cleanup.
+          }
+          // eslint-disable-next-line no-console
+          console.log("[pattern] auto window ended; pattern stopped");
+        })();
+        return;
+      }
       patternState.step = 0;
       // eslint-disable-next-line no-console
       console.log("[pattern] duration window elapsed; restarting pattern cycle");
@@ -540,9 +554,11 @@ app.post("/motion", async (req, res) => {
       if (enabled) {
         // eslint-disable-next-line no-console
         console.log(
-          `[pattern] start name=${patternTrigger.pattern} speed=${patternTrigger.speed.toFixed(3)} intervalMs=${patternTrigger.intervalMs} durationMs=${patternTrigger.durationMs}`
+          `[pattern] start name=${patternTrigger.pattern} auto=${Boolean(patternTrigger.auto)} speed=${patternTrigger.speed.toFixed(3)} intervalMs=${patternTrigger.intervalMs} durationMs=${patternTrigger.durationMs}`
         );
-        await startPatternRunner(patternTrigger);
+        await startPatternRunner(patternTrigger, {
+          repeatWindows: !Boolean(patternTrigger.auto)
+        });
       }
       return res.json({
         accepted: true,

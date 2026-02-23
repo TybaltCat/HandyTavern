@@ -544,6 +544,8 @@ export function parsePatternTrigger(text, options = {}) {
     }
 
     return {
+      auto: false,
+      explicit: true,
       pattern: parsePatternName(patternValue),
       speed: fields.speed ? parseSpeed(fields.speed) : 0.55,
       intervalMs: fields.interval ? parseIntervalMs(fields.interval) : 1800,
@@ -576,6 +578,8 @@ function parseRelaxedPatternTrigger(text) {
   if (!pattern) return null;
 
   return {
+    auto: !Boolean(explicit),
+    explicit: Boolean(explicit),
     pattern,
     speed: speedMatch ? parseSpeed(speedMatch[1]) : 0.55,
     intervalMs: intervalMatch ? parseIntervalMs(intervalMatch[1]) : 1800,
