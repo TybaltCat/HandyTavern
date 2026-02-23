@@ -9,9 +9,8 @@ const DEFAULTS = {
   holdUntilNextCommand: true,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
-  safeMode: false,
-  safeMaxSpeed: 60,
-  safeMaxDurationMs: 4000,
+  safeMode: true,
+  safeMaxSpeed: 75,
   patternIntervalMs: 1800,
   testSpeedGentlePct: 20,
   testSpeedBriskPct: 55,
@@ -245,7 +244,6 @@ async function syncConfig() {
     minimumAllowedStroke: clampPercent(settings.minimumAllowedStroke) / 100,
     safeMode: Boolean(settings.safeMode),
     safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
-    safeMaxDurationMs: Math.max(250, Number(settings.safeMaxDurationMs) || 4000),
     strictMotionTag: Boolean(settings.strictTagOnly),
     holdUntilNextCommand: Boolean(settings.holdUntilNextCommand),
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
@@ -282,6 +280,16 @@ function onInputChange(event) {
   const { name, type } = event.target;
   if (!name || !Object.prototype.hasOwnProperty.call(settings, name)) return;
 
+  if (name === "safeMode" && type === "checkbox" && event.target.checked === false) {
+    const confirmed = window.confirm(
+      "Turning off safe mode may ruin your junk. Do so at your own risk."
+    );
+    if (!confirmed) {
+      event.target.checked = true;
+      return;
+    }
+  }
+
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
   if (
     type === "number" &&
@@ -302,8 +310,8 @@ function onInputChange(event) {
   ) {
     settings[name] = clampPercent(settings[name]);
   }
-  if (type === "number" && name === "safeMaxDurationMs") {
-    settings[name] = Math.max(250, Number(settings[name]) || 4000);
+  if (name === "safeMaxSpeed") {
+    settings[name] = Math.min(75, clampPercent(settings[name]));
   }
   if (name === "globalStrokeMinPct" && Number(settings.globalStrokeMinPct) > Number(settings.globalStrokeMaxPct)) {
     settings.globalStrokeMaxPct = settings.globalStrokeMinPct;
@@ -316,6 +324,22 @@ function onInputChange(event) {
   }
   if (name === "speedMax" && Number(settings.speedMax) < Number(settings.speedMin)) {
     settings.speedMin = settings.speedMax;
+  }
+  if (settings.safeMode && (name === "speedMin" || name === "speedMax")) {
+    if (Number(settings.speedMax) > 75) {
+      settings.speedMax = 75;
+      if (name === "speedMax") {
+        event.target.value = "75";
+      }
+      window.alert("Safe Mode is ON: Global Speed Window cannot exceed 75%.");
+    }
+    if (Number(settings.speedMin) > 75) {
+      settings.speedMin = 75;
+      if (name === "speedMin") {
+        event.target.value = "75";
+      }
+      window.alert("Safe Mode is ON: Global Speed Window cannot exceed 75%.");
+    }
   }
   if (type === "number" && name === "patternIntervalMs") {
     settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
@@ -388,10 +412,6 @@ async function handleParkHold() {
   } catch (error) {
     setStatus(`Park error: ${error.message}`);
   }
-}
-
-async function handleQuickEmergencyStop() {
-  await handleEmergencyStop();
 }
 
 async function startTestMode() {
@@ -565,13 +585,6 @@ async function handleTestMotion() {
   }
 }
 
-function currentTestSpeed() {
-  const min = clampPercent(settings.speedMin);
-  const max = clampPercent(settings.speedMax);
-  if (max < min) return min;
-  return Math.round((min + max) / 2);
-}
-
 function speedSettingKeyForStyle(style) {
   if (style === "gentle") return "testSpeedGentlePct";
   if (style === "brisk") return "testSpeedBriskPct";
@@ -623,6 +636,14 @@ async function sendModeTest(style, depth) {
 }
 
 async function toggleSafeMode(enabled) {
+  if (!enabled && settings.safeMode) {
+    const confirmed = window.confirm(
+      "Turning off safe mode may ruin your junk. Do so at your own risk."
+    );
+    if (!confirmed) {
+      return;
+    }
+  }
   settings.safeMode = Boolean(enabled);
   saveSettings();
   await syncConfig();
@@ -685,14 +706,6 @@ function renderSettingsPanel() {
         <input class="tavernplug-range-max" type="range" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
       </div>
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
-    </div>
-    <div class="tavernplug-row">
-      <label>Safe Max Speed (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="safeMaxSpeed" value="${settings.safeMaxSpeed}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Safe Max Duration (ms)</label>
-      <input type="number" step="100" min="250" name="safeMaxDurationMs" value="${settings.safeMaxDurationMs}" />
     </div>
     <div class="tavernplug-row">
       <label>Pattern Interval (ms)</label>
@@ -760,10 +773,6 @@ function renderSettingsPanel() {
       <label>
         <input type="checkbox" name="autoSend" ${settings.autoSend ? "checked" : ""} />
         Auto-send latest assistant messages
-      </label>
-      <label>
-        <input type="checkbox" name="strictTagOnly" ${settings.strictTagOnly ? "checked" : ""} />
-        Only send messages containing [motion: ...]
       </label>
       <label>
         <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
@@ -1000,7 +1009,7 @@ function mountQuickStopButton() {
   button.textContent = "Emergency Stop";
   button.title = "Immediate stop for Handy motion";
   button.addEventListener("click", () => {
-    void handleQuickEmergencyStop();
+    void handleEmergencyStop();
   });
 
   const container = findQuickStopContainer();

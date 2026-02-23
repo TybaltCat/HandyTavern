@@ -57,9 +57,8 @@ let motionConfig = {
   speedMin: Number(process.env.SPEED_MIN ?? 0),
   speedMax: Number(process.env.SPEED_MAX ?? 1),
   minimumAllowedStroke: Number(process.env.MINIMUM_ALLOWED_STROKE ?? 0),
-  safeMode: String(process.env.SAFE_MODE ?? "false").toLowerCase() === "true",
-  safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.6),
-  safeMaxDurationMs: Number(process.env.SAFE_MAX_DURATION_MS ?? 4000),
+  safeMode: String(process.env.SAFE_MODE ?? "true").toLowerCase() === "true",
+  safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.75),
   holdUntilNextCommand:
     String(process.env.HOLD_UNTIL_NEXT_COMMAND ?? "false").toLowerCase() === "true",
   stopPreviousOnNewMotion:
@@ -117,10 +116,6 @@ function sanitizeMotionConfig(input) {
       input.safeMaxSpeed === undefined
         ? motionConfig.safeMaxSpeed
         : Number(input.safeMaxSpeed),
-    safeMaxDurationMs:
-      input.safeMaxDurationMs === undefined
-        ? motionConfig.safeMaxDurationMs
-        : Number(input.safeMaxDurationMs),
     holdUntilNextCommand:
       input.holdUntilNextCommand === undefined
         ? motionConfig.holdUntilNextCommand
@@ -156,9 +151,6 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.safeMaxSpeed)) {
     throw new Error("safeMaxSpeed must be a number between 0 and 1");
   }
-  if (!Number.isFinite(next.safeMaxDurationMs) || next.safeMaxDurationMs <= 0) {
-    throw new Error("safeMaxDurationMs must be a positive number");
-  }
 
   next.strokeRange = clamp01(next.strokeRange);
   next.globalStrokeMin = clamp01(next.globalStrokeMin);
@@ -166,8 +158,7 @@ function sanitizeMotionConfig(input) {
   next.speedMin = clamp01(next.speedMin);
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
-  next.safeMaxSpeed = clamp01(next.safeMaxSpeed);
-  next.safeMaxDurationMs = Math.round(next.safeMaxDurationMs);
+  next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
 
   if (next.speedMax < next.speedMin) {
     const tmp = next.speedMin;
@@ -179,6 +170,10 @@ function sanitizeMotionConfig(input) {
     next.globalStrokeMin = next.globalStrokeMax;
     next.globalStrokeMax = tmp;
   }
+  if (next.safeMode) {
+    next.speedMin = Math.min(next.speedMin, 0.75);
+    next.speedMax = Math.min(next.speedMax, 0.75);
+  }
 
   return next;
 }
@@ -189,21 +184,9 @@ function applySafeModeToMotion(motion, config) {
   if (!config.safeMode) return motion;
   return {
     ...motion,
-    speed: Math.min(motion.speed, config.safeMaxSpeed),
-    durationMs: Math.min(motion.durationMs, config.safeMaxDurationMs)
+    // Safe mode only constrains speed and never exceeds 75%.
+    speed: Math.min(motion.speed, config.safeMaxSpeed, 0.75)
   };
-}
-
-function runMotionAsync(runMotion, config) {
-  return controller
-    .runMotion(runMotion, config, {
-      stopPreviousOnNewMotion: config.stopPreviousOnNewMotion,
-      holdUntilNextCommand: config.holdUntilNextCommand
-    })
-    .catch((error) => {
-      // eslint-disable-next-line no-console
-      console.error("[motion] async error:", error);
-    });
 }
 
 function cancelMotionRunner() {
@@ -420,15 +403,22 @@ async function startPatternRunner(trigger, options = {}) {
       if (!patternState.active) return;
       if (!repeatWindows) {
         stopPatternRunner();
-        void (async () => {
-          try {
-            await controller.parkAtZero();
-          } catch (_error) {
-            // Best-effort cleanup.
-          }
-          // eslint-disable-next-line no-console
-          console.log("[pattern] auto window ended; pattern stopped");
-        })();
+        const fallbackMotion = applySafeModeToMotion(
+          {
+            style: "normal",
+            depth: "middle",
+            speed: Math.max(0.35, Math.min(0.65, trigger.speed ?? 0.55)),
+            durationMs: 5000
+          },
+          motionConfig
+        );
+        cancelMotionRunner();
+        startMotionRunner(fallbackMotion, {
+          ...motionConfig,
+          holdUntilNextCommand: true
+        });
+        // eslint-disable-next-line no-console
+        console.log(`[pattern] auto ${trigger.pattern} ended; fallback to normal/middle hold`);
         return;
       }
       patternState.step = 0;
@@ -677,7 +667,6 @@ app.post("/preview-motion", (req, res) => {
         minimumAllowedStroke: motionConfig.minimumAllowedStroke,
         safeMode: motionConfig.safeMode,
         safeMaxSpeed: motionConfig.safeMaxSpeed,
-        safeMaxDurationMs: motionConfig.safeMaxDurationMs,
         holdUntilNextCommand: motionConfig.holdUntilNextCommand
       }
     });
@@ -717,7 +706,6 @@ app.post("/preview-motion", (req, res) => {
       minimumAllowedStroke: motionConfig.minimumAllowedStroke,
       safeMode: motionConfig.safeMode,
       safeMaxSpeed: motionConfig.safeMaxSpeed,
-      safeMaxDurationMs: motionConfig.safeMaxDurationMs,
       holdUntilNextCommand: motionConfig.holdUntilNextCommand
     }
   });
