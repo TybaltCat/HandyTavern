@@ -44,6 +44,8 @@ let motionConfig = {
   safeMode: String(process.env.SAFE_MODE ?? "false").toLowerCase() === "true",
   safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.6),
   safeMaxDurationMs: Number(process.env.SAFE_MAX_DURATION_MS ?? 4000),
+  holdUntilNextCommand:
+    String(process.env.HOLD_UNTIL_NEXT_COMMAND ?? "false").toLowerCase() === "true",
   stopPreviousOnNewMotion:
     String(process.env.STOP_PREVIOUS_ON_NEW_MOTION ?? "true").toLowerCase() === "true"
 };
@@ -94,6 +96,10 @@ function sanitizeMotionConfig(input) {
       input.safeMaxDurationMs === undefined
         ? motionConfig.safeMaxDurationMs
         : Number(input.safeMaxDurationMs),
+    holdUntilNextCommand:
+      input.holdUntilNextCommand === undefined
+        ? motionConfig.holdUntilNextCommand
+        : parseBoolean(input.holdUntilNextCommand, motionConfig.holdUntilNextCommand),
     stopPreviousOnNewMotion:
       input.stopPreviousOnNewMotion === undefined
         ? motionConfig.stopPreviousOnNewMotion
@@ -144,6 +150,18 @@ function applySafeModeToMotion(motion, config) {
     speed: Math.min(motion.speed, config.safeMaxSpeed),
     durationMs: Math.min(motion.durationMs, config.safeMaxDurationMs)
   };
+}
+
+function runMotionAsync(runMotion, config) {
+  return controller
+    .runMotion(runMotion, config, {
+      stopPreviousOnNewMotion: config.stopPreviousOnNewMotion,
+      holdUntilNextCommand: config.holdUntilNextCommand
+    })
+    .catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error("[motion] async error:", error);
+    });
 }
 
 async function ensureReady() {
@@ -222,10 +240,19 @@ app.post("/motion", async (req, res) => {
     const runMotion = applySafeModeToMotion(motion, motionConfig);
     if (enabled) {
       // eslint-disable-next-line no-console
-      console.log("[motion] running", runMotion, `safeMode=${motionConfig.safeMode}`);
-      await controller.runMotion(runMotion, motionConfig, {
-        stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion
-      });
+      console.log(
+        "[motion] running",
+        runMotion,
+        `safeMode=${motionConfig.safeMode} holdUntilNextCommand=${motionConfig.holdUntilNextCommand}`
+      );
+      if (motionConfig.holdUntilNextCommand) {
+        void runMotionAsync(runMotion, motionConfig);
+      } else {
+        await controller.runMotion(runMotion, motionConfig, {
+          stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion,
+          holdUntilNextCommand: false
+        });
+      }
     }
 
     return res.json({
@@ -277,9 +304,14 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
     try {
       await ensureReady();
       const runMotion = applySafeModeToMotion(motion, motionConfig);
-      await controller.runMotion(runMotion, motionConfig, {
-        stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion
-      });
+      if (motionConfig.holdUntilNextCommand) {
+        void runMotionAsync(runMotion, motionConfig);
+      } else {
+        await controller.runMotion(runMotion, motionConfig, {
+          stopPreviousOnNewMotion: motionConfig.stopPreviousOnNewMotion,
+          holdUntilNextCommand: false
+        });
+      }
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("device error:", error);

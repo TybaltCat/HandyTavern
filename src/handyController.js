@@ -47,13 +47,13 @@ async function runLinearIfSupported(device, durationMs, position) {
   const safeDurationSec = Math.max(0.001, safeDurationMs / 1000);
   const safePosition = clamp01(position);
 
-  // Known payload shapes across buttplug client/device variants.
-  // Avoid ambiguous positional-argument overloads that may swap duration/position.
+  // This buttplug client expects tuple commands, not object vectors.
+  // Keep both ms/sec duration attempts for server-version compatibility.
   const attempts = [
-    async () => device.linear([{ duration: safeDurationMs, position: safePosition }]),
-    async () => device.linear([{ Duration: safeDurationMs, Position: safePosition, Index: 0 }]),
-    async () => device.linear([{ duration: safeDurationSec, position: safePosition }]),
-    async () => device.linear([{ Duration: safeDurationSec, Position: safePosition, Index: 0 }])
+    async () => device.linear([[safePosition, safeDurationMs]]),
+    async () => device.linear([[safePosition, safeDurationSec]]),
+    async () => device.linear(safePosition, safeDurationMs),
+    async () => device.linear(safePosition, safeDurationSec)
   ];
 
   for (const attempt of attempts) {
@@ -66,6 +66,13 @@ async function runLinearIfSupported(device, durationMs, position) {
   }
 
   return false;
+}
+
+async function sendLinearStep(device, durationMs, position) {
+  const ok = await runLinearIfSupported(device, durationMs, position);
+  if (!ok) {
+    throw new Error("Linear command failed for all supported payload shapes.");
+  }
 }
 
 export class HandyController {
@@ -155,9 +162,13 @@ export class HandyController {
       await this.connect();
     }
 
-    // Set false to allow overlaps; true preempts old motions on each new one.
-    const stopPreviousOnNewMotion = options.stopPreviousOnNewMotion ?? true;
-    const sequence = stopPreviousOnNewMotion ? ++this.motionSequence : this.motionSequence;
+    const holdUntilNextCommand = options.holdUntilNextCommand ?? false;
+    // Hold mode always requires preemption so old loops can terminate.
+    const stopPreviousOnNewMotion =
+      holdUntilNextCommand || (options.stopPreviousOnNewMotion ?? true);
+    const sequence = stopPreviousOnNewMotion
+      ? ++this.motionSequence
+      : this.motionSequence;
     const device = await this.ensureDevice();
     const depthMultiplier = DEPTH_INTENSITY_MULTIPLIER[motion.depth] ?? 1;
     // User-tunable speed window. Incoming speed is remapped into this range.
@@ -167,14 +178,29 @@ export class HandyController {
     const scalar = clamp01(remapped * depthMultiplier);
     // User-tunable stroke limits are applied inside computeStrokePosition().
     const strokePosition = computeStrokePosition(motion.depth, motionConfig);
+    const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+    const maxStroke = Math.max(minStroke + 0.05, strokePosition);
+    const halfCycleMs = Math.max(120, Math.round(800 - remapped * 650));
 
     if (stopPreviousOnNewMotion) {
       await this.stopNow();
       if (sequence !== this.motionSequence) return;
     }
 
-    await runLinearIfSupported(device, motion.durationMs, strokePosition);
-    if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
+    if (typeof device.linear === "function") {
+      let toMax = true;
+      const end = Date.now() + motion.durationMs;
+      while (holdUntilNextCommand || Date.now() < end) {
+        if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
+        const remaining = holdUntilNextCommand ? halfCycleMs : end - Date.now();
+        const stepMs = Math.max(40, Math.min(halfCycleMs, remaining));
+        const target = toMax ? maxStroke : minStroke;
+        await sendLinearStep(device, stepMs, target);
+        toMax = !toMax;
+      }
+      await this.stopNow();
+      return;
+    }
 
     if (typeof device.scalar === "function") {
       await device.scalar(scalar);
@@ -182,6 +208,13 @@ export class HandyController {
       await device.vibrate(scalar);
     } else {
       throw new Error("Device does not support scalar/vibrate commands.");
+    }
+
+    if (holdUntilNextCommand) {
+      while (!stopPreviousOnNewMotion || sequence === this.motionSequence) {
+        await sleep(100);
+      }
+      return;
     }
 
     if (stopPreviousOnNewMotion) {

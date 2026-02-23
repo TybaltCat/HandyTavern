@@ -54,6 +54,7 @@ The extension UI lets you set:
 - Speed Range Min/Max
 - Minimum Allowed Stroke
 - Stop previous motion when a new message is sent
+- Hold motion until next command
 - Safe Mode toggle + caps (max speed/duration)
 - Bridge URL
 - Test Motion button
@@ -86,6 +87,7 @@ Strict mode is enabled by default (`STRICT_MOTION_TAG=true`). The motion tag is 
   - `safeMode` (boolean)
   - `safeMaxSpeed` (0..1)
   - `safeMaxDurationMs` (integer, ms)
+  - `holdUntilNextCommand` (boolean)
   - `stopPreviousOnNewMotion` (boolean)
 - `POST /emergency-stop` to force stop
 

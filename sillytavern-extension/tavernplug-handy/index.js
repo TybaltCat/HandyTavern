@@ -4,6 +4,7 @@ const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   autoSend: true,
   strictTagOnly: true,
+  holdUntilNextCommand: false,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
   safeMode: false,
@@ -119,6 +120,7 @@ async function syncConfig() {
     safeMode: Boolean(settings.safeMode),
     safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
     safeMaxDurationMs: Math.max(250, Number(settings.safeMaxDurationMs) || 4000),
+    holdUntilNextCommand: Boolean(settings.holdUntilNextCommand),
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
   };
 
@@ -208,6 +210,13 @@ async function toggleSafeMode(enabled) {
   setStatus(`Safe Mode ${settings.safeMode ? "ON" : "OFF"}`);
 }
 
+async function toggleHoldMode(enabled) {
+  settings.holdUntilNextCommand = Boolean(enabled);
+  saveSettings();
+  await syncConfig();
+  setStatus(`Hold Until Next Command ${settings.holdUntilNextCommand ? "ON" : "OFF"}`);
+}
+
 function setPanelCollapsed(panel, collapsed) {
   settings.panelCollapsed = Boolean(collapsed);
   panel.classList.toggle("tavernplug-collapsed", settings.panelCollapsed);
@@ -276,6 +285,10 @@ function renderSettingsPanel() {
         Stop previous motion when a new message is sent
       </label>
       <label>
+        <input type="checkbox" name="holdUntilNextCommand" ${settings.holdUntilNextCommand ? "checked" : ""} />
+        Hold motion until next command
+      </label>
+      <label>
         <input type="checkbox" name="safeMode" ${settings.safeMode ? "checked" : ""} />
         Safe Mode
       </label>
@@ -293,6 +306,8 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
     </div>
     <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-on">Hold ON</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-off">Hold OFF</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
@@ -333,6 +348,12 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-safe-off`)?.addEventListener("click", () => {
     void toggleSafeMode(false);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-hold-on`)?.addEventListener("click", () => {
+    void toggleHoldMode(true);
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-hold-off`)?.addEventListener("click", () => {
+    void toggleHoldMode(false);
   });
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();
