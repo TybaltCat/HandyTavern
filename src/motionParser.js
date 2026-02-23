@@ -1,5 +1,5 @@
 // Add/remove allowed style words for strict [motion: ...] tags here.
-const VALID_STYLES = new Set(["gentle", "normal", "rough"]);
+const VALID_STYLES = new Set(["gentle", "brisk", "normal", "hard", "intense", "rough"]);
 // Add/remove allowed depth words for strict tags here.
 const VALID_DEPTHS = new Set(["tip", "middle", "full", "deep"]);
 
@@ -63,7 +63,7 @@ function parseTaggedMotion(text) {
   const depth = (fields.depth ?? "middle").toLowerCase();
 
   if (!VALID_STYLES.has(style)) {
-    throw new Error('Invalid style. Allowed: gentle, normal, rough');
+    throw new Error("Invalid style. Allowed: gentle, brisk, normal, hard, intense, rough");
   }
 
   if (!VALID_DEPTHS.has(depth)) {
@@ -85,8 +85,10 @@ function parseTaggedMotion(text) {
 function parseRelaxedMotion(text) {
   const lower = text.toLowerCase();
   // Add alternative free-text style words in this regex when strict mode is disabled.
-  const style = VALID_STYLES.has(lower.match(/\b(gentle|normal|rough)\b/)?.[1] ?? "")
-    ? lower.match(/\b(gentle|normal|rough)\b/)[1]
+  const style = VALID_STYLES.has(
+    lower.match(/\b(gentle|brisk|normal|hard|intense|rough)\b/)?.[1] ?? ""
+  )
+    ? lower.match(/\b(gentle|brisk|normal|hard|intense|rough)\b/)[1]
     : "normal";
   // Add alternative free-text depth words here when strict mode is disabled.
   const depth = VALID_DEPTHS.has(lower.match(/\b(tip|middle|full|deep)\b/)?.[1] ?? "")

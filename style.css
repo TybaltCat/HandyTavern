@@ -40,11 +40,14 @@
 
 .tavernplug-row label {
   font-size: 0.9rem;
+  color: #000;
 }
 
 .tavernplug-row input[type="text"],
 .tavernplug-row input[type="number"] {
   width: 100%;
+  color: #000;
+  -webkit-text-fill-color: #000;
 }
 
 .tavernplug-actions {

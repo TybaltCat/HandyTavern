@@ -10,6 +10,11 @@ const DEFAULTS = {
   safeMode: false,
   safeMaxSpeed: 60,
   safeMaxDurationMs: 4000,
+  testSpeedGentlePct: 20,
+  testSpeedBriskPct: 40,
+  testSpeedNormalPct: 55,
+  testSpeedHardPct: 75,
+  testSpeedIntensePct: 90,
   handyConnectionKey: "",
   strokeRange: 100,
   speedMin: 0,
@@ -43,6 +48,11 @@ normalizePercentSetting("speedMin");
 normalizePercentSetting("speedMax");
 normalizePercentSetting("minimumAllowedStroke");
 normalizePercentSetting("safeMaxSpeed");
+normalizePercentSetting("testSpeedGentlePct");
+normalizePercentSetting("testSpeedBriskPct");
+normalizePercentSetting("testSpeedNormalPct");
+normalizePercentSetting("testSpeedHardPct");
+normalizePercentSetting("testSpeedIntensePct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -157,7 +167,18 @@ function onInputChange(event) {
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
   if (
     type === "number" &&
-    ["strokeRange", "speedMin", "speedMax", "minimumAllowedStroke", "safeMaxSpeed"].includes(name)
+    [
+      "strokeRange",
+      "speedMin",
+      "speedMax",
+      "minimumAllowedStroke",
+      "safeMaxSpeed",
+      "testSpeedGentlePct",
+      "testSpeedBriskPct",
+      "testSpeedNormalPct",
+      "testSpeedHardPct",
+      "testSpeedIntensePct"
+    ].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
   }
@@ -168,7 +189,12 @@ function onInputChange(event) {
     "strokeRange",
     "minimumAllowedStroke",
     "speedMin",
-    "speedMax"
+    "speedMax",
+    "testSpeedGentlePct",
+    "testSpeedBriskPct",
+    "testSpeedNormalPct",
+    "testSpeedHardPct",
+    "testSpeedIntensePct"
   ].includes(name);
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
@@ -228,14 +254,32 @@ function currentTestSpeed() {
   return Math.round((min + max) / 2);
 }
 
+function speedSettingKeyForStyle(style) {
+  if (style === "gentle") return "testSpeedGentlePct";
+  if (style === "brisk") return "testSpeedBriskPct";
+  if (style === "hard") return "testSpeedHardPct";
+  if (style === "intense") return "testSpeedIntensePct";
+  return "testSpeedNormalPct";
+}
+
+function currentStyleSpeed(style) {
+  const min = clampPercent(settings.speedMin);
+  const max = clampPercent(settings.speedMax);
+  if (max < min) return min;
+
+  const stylePct = clampPercent(settings[speedSettingKeyForStyle(style)]);
+  const clamped = Math.max(min, Math.min(max, stylePct));
+  return Math.round(clamped);
+}
+
 async function sendModeTest(style, depth) {
   testModeStyle = style;
   testModeDepth = depth;
-  const speed = currentTestSpeed();
+  const speed = currentStyleSpeed(style);
   const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=3s]`;
   try {
     await postJson("/motion", { text: testTag });
-    setStatus(`Mode test sent: ${style}/${depth}`);
+    setStatus(`Mode test sent: ${style}/${depth} @ ${speed}`);
   } catch (error) {
     setStatus(`Mode test error: ${error.message}`);
   }
@@ -281,10 +325,6 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
-      <label>Handy Connection Key</label>
-      <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
-    </div>
-    <div class="tavernplug-row">
       <label>Stroke Range (0-100)</label>
       <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
     </div>
@@ -307,6 +347,26 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Safe Max Duration (ms)</label>
       <input type="number" step="100" min="250" name="safeMaxDurationMs" value="${settings.safeMaxDurationMs}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Gentle Speed %</label>
+      <input type="number" step="1" min="0" max="100" name="testSpeedGentlePct" value="${settings.testSpeedGentlePct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Brisk Speed %</label>
+      <input type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Normal Speed %</label>
+      <input type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Hard Speed %</label>
+      <input type="number" step="1" min="0" max="100" name="testSpeedHardPct" value="${settings.testSpeedHardPct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Intense Speed %</label>
+      <input type="number" step="1" min="0" max="100" name="testSpeedIntensePct" value="${settings.testSpeedIntensePct}" />
     </div>
     <div class="tavernplug-row">
       <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
@@ -334,8 +394,10 @@ function renderSettingsPanel() {
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Mode Start</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-gentle">Gentle</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-brisk">Brisk</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-normal">Normal</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-rough">Rough</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-hard">Hard</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-intense">Intense</button>
     </div>
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-tip">Tip</button>
@@ -363,11 +425,17 @@ function renderSettingsPanel() {
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
     void sendModeTest("gentle", "middle");
   });
+  panel.querySelector(`#${EXTENSION_NAME}-mode-brisk`)?.addEventListener("click", () => {
+    void sendModeTest("brisk", "middle");
+  });
   panel.querySelector(`#${EXTENSION_NAME}-mode-normal`)?.addEventListener("click", () => {
     void sendModeTest("normal", "middle");
   });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-rough`)?.addEventListener("click", () => {
-    void sendModeTest("rough", "middle");
+  panel.querySelector(`#${EXTENSION_NAME}-mode-hard`)?.addEventListener("click", () => {
+    void sendModeTest("hard", "middle");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-mode-intense`)?.addEventListener("click", () => {
+    void sendModeTest("intense", "middle");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-tip`)?.addEventListener("click", () => {
     void sendModeTest("normal", "tip");

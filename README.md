@@ -6,7 +6,7 @@ Parses text (from SillyTavern or any local source) into motion intent and sends 
 
 - Accepts text on `POST /motion` (`{ "text": "..." }`).
 - Extracts:
-  - `style` (`gentle`, `normal`, `rough`)
+  - `style` (`gentle`, `brisk`, `normal`, `hard`, `intense`, `rough`)
   - `depth` (`tip`, `middle`, `full`, `deep`)
   - `speed` (0.0 to 1.0)
   - `durationMs`
@@ -70,7 +70,7 @@ Recommended prompt convention for better parsing:
 
 Strict mode is enabled by default (`STRICT_MOTION_TAG=true`). The motion tag is required and fields are:
 
-- `style`: `gentle|normal|rough` (default `normal`)
+- `style`: `gentle|brisk|normal|hard|intense|rough` (default `normal`)
 - `speed`: `0-100` or `0.0-1.0` (required)
 - `depth`: `tip|middle|full|deep` (default `middle`)
 - `duration`: `ms` or `s` suffix, e.g. `800ms`, `6s` (default `5s`)
