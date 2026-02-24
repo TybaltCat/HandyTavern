@@ -12,6 +12,10 @@ const DEFAULTS = {
   safeMode: true,
   safeMaxSpeed: 75,
   patternIntervalMs: 1800,
+  cumStyle: "intense",
+  cumDepth: "deep",
+  cumSpeedPct: 75,
+  cumDurationMs: 6000,
   testSpeedGentlePct: 20,
   testSpeedBriskPct: 55,
   testSpeedNormalPct: 40,
@@ -62,11 +66,13 @@ normalizePercentSetting("testSpeedBriskPct");
 normalizePercentSetting("testSpeedNormalPct");
 normalizePercentSetting("testSpeedHardPct");
 normalizePercentSetting("testSpeedIntensePct");
+normalizePercentSetting("cumSpeedPct");
 normalizePercentSetting("globalStrokeMinPct");
 normalizePercentSetting("globalStrokeMaxPct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
+let lastSentMessageSignature = "";
 let pollHandle = null;
 let statusEl = null;
 let modeStateEl = null;
@@ -79,6 +85,11 @@ let patternIntervalHandle = null;
 let activePatternName = null;
 let patternStep = 0;
 let quickStopRetryHandle = null;
+let lastObservedMessageId = -1;
+let lastObservedMessageText = "";
+let lastObservedMessageChangedAt = 0;
+
+const MESSAGE_STABILIZE_MS = 1200;
 
 function clampPercent(value) {
   const num = Number(value);
@@ -259,9 +270,24 @@ async function syncConfig() {
 
 async function sendMotionIfNeeded(message) {
   if (!settings.autoSend || !message) return;
-  if (message.id <= lastSentMessageId) return;
+  const text = String(message.text ?? "");
+  const now = Date.now();
+
+  // Wait until streamed assistant text appears stable before sending.
+  if (message.id !== lastObservedMessageId || text !== lastObservedMessageText) {
+    lastObservedMessageId = message.id;
+    lastObservedMessageText = text;
+    lastObservedMessageChangedAt = now;
+    return;
+  }
+  if (now - lastObservedMessageChangedAt < MESSAGE_STABILIZE_MS) return;
+
+  const signature = `${message.id}:${text}`;
+  if (signature === lastSentMessageSignature) return;
+
   if (shouldSkipMessageText(message.text)) {
     lastSentMessageId = message.id;
+    lastSentMessageSignature = signature;
     setStatus(`Skipped message ${message.id} (filtered)`);
     return;
   }
@@ -270,6 +296,7 @@ async function sendMotionIfNeeded(message) {
   try {
     await postJson("/motion", { text: message.text });
     lastSentMessageId = message.id;
+    lastSentMessageSignature = signature;
     setStatus(`Sent message ${message.id}`);
   } catch (error) {
     setStatus(`Motion error: ${error.message}`);
@@ -282,7 +309,7 @@ function onInputChange(event) {
 
   if (name === "safeMode" && type === "checkbox" && event.target.checked === false) {
     const confirmed = window.confirm(
-      "Turning off safe mode may ruin your junk. Do so at your own risk."
+      "Turning off safe mode may break your dick and/or ruin your asshole. You've been warned. On hitting okay SAFE MODE WILL BE OFF and may god have mercy on your soul."
     );
     if (!confirmed) {
       event.target.checked = true;
@@ -304,6 +331,7 @@ function onInputChange(event) {
       "testSpeedNormalPct",
       "testSpeedHardPct",
       "testSpeedIntensePct",
+      "cumSpeedPct",
       "globalStrokeMinPct",
       "globalStrokeMaxPct"
     ].includes(name)
@@ -343,6 +371,9 @@ function onInputChange(event) {
   }
   if (type === "number" && name === "patternIntervalMs") {
     settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
+  }
+  if (type === "number" && name === "cumDurationMs") {
+    settings[name] = Math.max(250, Math.min(120000, Number(settings[name]) || 6000));
   }
   if (type === "number" && name === "pollIntervalMs") {
     settings[name] = Math.max(500, Math.min(60000, Number(settings[name]) || 3000));
@@ -411,6 +442,34 @@ async function handleParkHold() {
     setStatus("Parked at 0 until next command");
   } catch (error) {
     setStatus(`Park error: ${error.message}`);
+  }
+}
+
+function clampCumStyle(raw) {
+  const value = String(raw ?? "").toLowerCase();
+  const allowed = ["gentle", "normal", "brisk", "hard", "intense"];
+  return allowed.includes(value) ? value : "intense";
+}
+
+function clampCumDepth(raw) {
+  const value = String(raw ?? "").toLowerCase();
+  const allowed = ["tip", "middle", "full", "deep"];
+  return allowed.includes(value) ? value : "deep";
+}
+
+async function handleCumAction() {
+  const style = clampCumStyle(settings.cumStyle);
+  const depth = clampCumDepth(settings.cumDepth);
+  const speed = clampPercent(settings.cumSpeedPct);
+  const durationMs = Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000));
+  const durationSec = (durationMs / 1000).toFixed(2).replace(/\.00$/, "");
+  const tag = `[motion: style=${style} speed=${speed} depth=${depth} duration=${durationSec}s]`;
+  try {
+    stopPatternMode(false);
+    await postJson("/motion", { text: tag });
+    setStatus(`Cum action sent: ${style}/${depth} @ ${speed}%`);
+  } catch (error) {
+    setStatus(`Cum action error: ${error.message}`);
   }
 }
 
@@ -638,7 +697,7 @@ async function sendModeTest(style, depth) {
 async function toggleSafeMode(enabled) {
   if (!enabled && settings.safeMode) {
     const confirmed = window.confirm(
-      "Turning off safe mode may ruin your junk. Do so at your own risk."
+      "Turning off safe mode may break your dick and/or ruin your asshole. You've been warned. On hitting okay SAFE MODE WILL BE OFF and may god have mercy on your soul."
     );
     if (!confirmed) {
       return;
@@ -716,6 +775,33 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-advanced-body" style="display:none;">
     <div class="tavernplug-row">
+      <label>Cum Button Style</label>
+      <select name="cumStyle">
+        <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
+        <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
+        <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
+        <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
+        <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Depth</label>
+      <select name="cumDepth">
+        <option value="tip" ${settings.cumDepth === "tip" ? "selected" : ""}>Tip</option>
+        <option value="middle" ${settings.cumDepth === "middle" ? "selected" : ""}>Middle</option>
+        <option value="full" ${settings.cumDepth === "full" ? "selected" : ""}>Full</option>
+        <option value="deep" ${settings.cumDepth === "deep" ? "selected" : ""}>Deep</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Speed (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="cumSpeedPct" value="${settings.cumSpeedPct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Duration (ms)</label>
+      <input type="number" step="100" min="250" max="120000" name="cumDurationMs" value="${settings.cumDurationMs}" />
+    </div>
+    <div class="tavernplug-row">
       <label>Message Check Interval (ms)</label>
       <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
     </div>
@@ -736,19 +822,19 @@ function renderSettingsPanel() {
       </div>
     </div>
     <div class="tavernplug-row">
-      <label>Brisk Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-down">-10</button>
-        <input id="${styleSpeedInputId("brisk")}" type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-up">+10</button>
-      </div>
-    </div>
-    <div class="tavernplug-row">
       <label>Normal Speed %</label>
       <div class="tavernplug-inline">
         <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-down">-10</button>
         <input id="${styleSpeedInputId("normal")}" type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
         <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-up">+10</button>
+      </div>
+    </div>
+    <div class="tavernplug-row">
+      <label>Brisk Speed %</label>
+      <div class="tavernplug-inline">
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-down">-10</button>
+        <input id="${styleSpeedInputId("brisk")}" type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
+        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-up">+10</button>
       </div>
     </div>
     <div class="tavernplug-row">
@@ -790,8 +876,8 @@ function renderSettingsPanel() {
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Mode Start</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-gentle">Gentle</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-brisk">Brisk</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-normal">Normal</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-brisk">Brisk</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-hard">Hard</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-intense">Intense</button>
     </div>
@@ -829,10 +915,10 @@ function renderSettingsPanel() {
     </div>
   `;
 
-  panel.querySelectorAll("input").forEach((input) => {
-    input.addEventListener("change", onInputChange);
-    if (input.type === "range") {
-      input.addEventListener("input", onInputChange);
+  panel.querySelectorAll("input, select").forEach((element) => {
+    element.addEventListener("change", onInputChange);
+    if (element.tagName === "INPUT" && element.type === "range") {
+      element.addEventListener("input", onInputChange);
     }
   });
   panel.querySelector(`#${EXTENSION_NAME}-test`)?.addEventListener("click", () => {
@@ -840,7 +926,7 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("gentle", "middle");
+    void sendModeTest("gentle", testModeDepth);
   });
   panel.querySelector(`#${EXTENSION_NAME}-gentle-down`)?.addEventListener("click", () => {
     adjustStyleSpeed("gentle", -10);
@@ -850,7 +936,7 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-brisk`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("brisk", "middle");
+    void sendModeTest("brisk", testModeDepth);
   });
   panel.querySelector(`#${EXTENSION_NAME}-brisk-down`)?.addEventListener("click", () => {
     adjustStyleSpeed("brisk", -10);
@@ -860,7 +946,7 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-normal`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("normal", "middle");
+    void sendModeTest("normal", testModeDepth);
   });
   panel.querySelector(`#${EXTENSION_NAME}-normal-down`)?.addEventListener("click", () => {
     adjustStyleSpeed("normal", -10);
@@ -870,7 +956,7 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-hard`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("hard", "middle");
+    void sendModeTest("hard", testModeDepth);
   });
   panel.querySelector(`#${EXTENSION_NAME}-hard-down`)?.addEventListener("click", () => {
     adjustStyleSpeed("hard", -10);
@@ -880,7 +966,7 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-intense`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("intense", "middle");
+    void sendModeTest("intense", testModeDepth);
   });
   panel.querySelector(`#${EXTENSION_NAME}-pattern-wave`)?.addEventListener("click", () => {
     void startPatternMode("wave");
@@ -923,19 +1009,19 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-tip`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("normal", "tip");
+    void sendModeTest(testModeStyle, "tip");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-middle`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("normal", "middle");
+    void sendModeTest(testModeStyle, "middle");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-full`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("normal", "full");
+    void sendModeTest(testModeStyle, "full");
   });
   panel.querySelector(`#${EXTENSION_NAME}-depth-deep`)?.addEventListener("click", () => {
     stopPatternMode(false);
-    void sendModeTest("normal", "deep");
+    void sendModeTest(testModeStyle, "deep");
   });
   panel.querySelector(`#${EXTENSION_NAME}-safe-on`)?.addEventListener("click", () => {
     void toggleSafeMode(true);
@@ -1000,27 +1086,44 @@ function ensurePanelMounted() {
 }
 
 function mountQuickStopButton() {
-  if (document.querySelector(`#${EXTENSION_NAME}-quick-stop`)) return true;
+  if (
+    document.querySelector(`#${EXTENSION_NAME}-quick-stop`)
+    && document.querySelector(`#${EXTENSION_NAME}-quick-cum`)
+  ) return true;
 
-  const button = document.createElement("button");
-  button.id = `${EXTENSION_NAME}-quick-stop`;
-  button.type = "button";
-  button.className = "menu_button tavernplug-quick-stop";
-  button.textContent = "Emergency Stop";
-  button.title = "Immediate stop for Handy motion";
-  button.addEventListener("click", () => {
+  const stopButton = document.createElement("button");
+  stopButton.id = `${EXTENSION_NAME}-quick-stop`;
+  stopButton.type = "button";
+  stopButton.className = "menu_button tavernplug-quick-stop";
+  stopButton.textContent = "Emergency Stop";
+  stopButton.title = "Immediate stop for Handy motion";
+  stopButton.addEventListener("click", () => {
     void handleEmergencyStop();
+  });
+
+  const cumButton = document.createElement("button");
+  cumButton.id = `${EXTENSION_NAME}-quick-cum`;
+  cumButton.type = "button";
+  cumButton.className = "menu_button tavernplug-quick-cum";
+  cumButton.textContent = "Cum";
+  cumButton.title = "Run user-configured cum action";
+  cumButton.addEventListener("click", () => {
+    void handleCumAction();
   });
 
   const container = findQuickStopContainer();
   if (container) {
-    button.classList.add("tavernplug-quick-stop-inline");
-    container.append(button);
+    stopButton.classList.add("tavernplug-quick-stop-inline");
+    cumButton.classList.add("tavernplug-quick-stop-inline");
+    container.append(stopButton);
+    container.append(cumButton);
     return true;
   }
 
-  button.classList.add("tavernplug-quick-stop-floating");
-  document.body.append(button);
+  stopButton.classList.add("tavernplug-quick-stop-floating");
+  cumButton.classList.add("tavernplug-quick-cum-floating");
+  document.body.append(stopButton);
+  document.body.append(cumButton);
   return true;
 }
 

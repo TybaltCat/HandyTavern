@@ -184,20 +184,10 @@ function deterministicChance(text, salt, threshold) {
 
 function shouldAutoTriggerPattern(text, inferredPattern) {
   if (!inferredPattern) return false;
-  const tier = detectIntensityTier(text);
-  const context = detectContextBoost(text).total;
-  const patternHint = /\b(pattern|mode|wave|pulse|ramp|random|tease|edging|burst|ladder|stutter|climax)\b/i.test(
-    String(text ?? "")
-  );
-
-  let probability = 0.2;
-  if (tier === "medium") probability = 0.3;
-  if (tier === "high") probability = 0.4;
-  if (context > 0) probability += Math.min(0.15, context * 0.03);
-  if (patternHint) probability += 0.2;
-
-  const bounded = Math.max(0.05, Math.min(0.8, probability));
-  return deterministicChance(text, `auto-pattern-${inferredPattern}`, bounded);
+  // Keep auto-pattern activation intentionally rare.
+  // Explicit pattern commands still always trigger.
+  const probability = 0.15;
+  return deterministicChance(text, `auto-pattern-${inferredPattern}`, probability);
 }
 
 function maybePickMotifByTier(text) {
@@ -254,22 +244,22 @@ function inferStyleFromScoring(text) {
   // Tune these weights/words to control style inference behavior in relaxed mode.
   const styleScores = scoreByKeywords(text, {
     gentle: [
-      { pattern: /\b(gentle|soft|light|tender)\b/i, weight: 2 }
+      { pattern: /\b(gentle|tender|soft|sweet|warm|soothing|calm|careful|kind|nurturing|comforting|patient|hushed|mild|featherlight|plush|caress|cuddle|lull|cradle|murmur|hush|comfort|warmth|softness|balm|glow|lullaby|light)\b/i, weight: 2 }
     ],
     brisk: [
       { pattern: /\b(brisk|steady|firm)\b/i, weight: 2 },
       { pattern: /\b(quick|faster)\b/i, weight: 1 }
     ],
     normal: [
-      { pattern: /\b(normal|regular|baseline|steady)\b/i, weight: 2 },
+      { pattern: /\b(normal|steady|easy|casual|relaxed|regular|even|measured|natural|simple|plain|consistent|unremarkable|everyday|familiar|baseline|steadiness|routine|stride|pace|tempo|meter|beat|pattern)\b/i, weight: 2 },
       { pattern: /\b(slow)\b/i, weight: 1 }
     ],
     hard: [
-      { pattern: /\b(hard|rough|strong|forceful)\b/i, weight: 2 },
+      { pattern: /\b(hard|rough|strong|forceful|firm|driving|assertive|insistent|solid|pushing|bold|determined|relentless|pressing|intense|heavy|powerful|slam|surge|force)\b/i, weight: 2 },
       { pattern: /\b(fast|faster)\b/i, weight: 1 }
     ],
     intense: [
-      { pattern: /\b(intense|extreme|wild|aggressive)\b/i, weight: 2 },
+      { pattern: /\b(intense|extreme|wild|aggressive|fierce|ravenous|heated|urgent|hungry|breathless|fevered|frantic|electric|charged|explosive|scorching|ferocious|relentless|consuming)\b/i, weight: 2 },
       { pattern: /\b(max|maximum)\b/i, weight: 1 }
     ]
   });
@@ -300,16 +290,16 @@ function inferDepthFromScoring(text) {
   // Tune depth scoring words here for relaxed mode.
   const depthScores = scoreByKeywords(text, {
     tip: [
-      { pattern: /\b(tip|shallow|edge)\b/i, weight: 2 }
+      { pattern: /\b(tip|shallow|edge|glans|frenulum|inch|crown|corona|slit|vulva|labia|outer lips)\b/i, weight: 2 }
     ],
     middle: [
-      { pattern: /\b(middle|mid|medium)\b/i, weight: 2 }
+      { pattern: /\b(middle|mid|medium|sheath|your length|measured|limited)\b/i, weight: 2 }
     ],
     full: [
       { pattern: /\b(full|deep-ish|deeper)\b/i, weight: 2 }
     ],
     deep: [
-      { pattern: /\b(deep|deepest|bottom|all the way)\b/i, weight: 3 }
+      { pattern: /\b(deep|deepest|bottom|all the way|throat|gasp|gasping|deep-throat|buried|plunge|choked|choking|diving|esophagus|hilt|cervix|deep penetration|invading|sinking|plunging|driving|reaching|searching|anchored|weighty|resonant|consuming|unyielding|rooted|far-reaching|dive|swallowed)\b/i, weight: 3 }
     ]
   });
 
@@ -339,18 +329,32 @@ function inferPatternFromScoring(text) {
   const patternScores = scoreByKeywords(text, {
     wave: [
       { pattern: /\b(thrust|thrusts|stroking|stroke|back and forth|rocking)\b/i, weight: 2 },
-      { pattern: /\b(sway|wave)\b/i, weight: 1 }
+      { pattern: /\b(sway|wave)\b/i, weight: 1 },
+      // Smooth and rounded
+      { pattern: /\b(fluid|flowing|gliding|rolling|wave-like|seamless|continuous|silky|velvety|buttery|supple|pliant|cushioned|rounded|eased|elastic|gentle-curved|soft-edged|undulating|drifting|molten|mellow|steadying|even-tempered)\b/i, weight: 2 },
+      // Controlled and deliberate
+      { pattern: /\b(deliberate|measured|precise|exact|intentional|purposeful|disciplined|steady-handed|regulated|controlled|contained|restrained|composed|grounded|centered|surgical|methodical|consistent|calculated|dialed-in)\b/i, weight: 1 }
     ],
     pulse: [
-      { pattern: /\b(pulse|pulsing|burst|bursts|tease|teasing)\b/i, weight: 2 }
+      { pattern: /\b(pulse|pulsing|burst|bursts|tease|teasing)\b/i, weight: 2 },
+      // Pulsed and rhythmic
+      { pattern: /\b(pulsed|throbbing|metered|rhythmic|cadenced|steady-beat|tempoed|patterned|looping|cyclical|swaying|rocking|loping|marching|drumming|heartbeat-like|pendulum|oscillating|ticking|churning|rolling-beat)\b/i, weight: 2 }
     ],
     ramp: [
       { pattern: /\b(ramp|build|building|escalate|climb)\b/i, weight: 2 },
       { pattern: /\b(faster and faster|speed up)\b/i, weight: 2 },
-      { pattern: /\b(faster and deeper|deeper and faster)\b/i, weight: 3 }
+      { pattern: /\b(faster and deeper|deeper and faster)\b/i, weight: 3 },
+      // Swell and release (builds)
+      { pattern: /\b(surging|swelling|rising|ramping|cresting|blooming|gathering|mounting|intensifying|lifting|peaking|tapering|ebbing|fading|cascading|rolling-in|wave-building|pressure-building|crescendoing)\b/i, weight: 2 }
     ],
     random: [
-      { pattern: /\b(random|chaotic|unpredictable|mixed)\b/i, weight: 2 }
+      { pattern: /\b(random|chaotic|unpredictable|mixed)\b/i, weight: 2 },
+      // Staccato and choppy
+      { pattern: /\b(staccato|choppy|jagged|jerky|twitchy|stop-start|broken|fragmented|syncopated|skittery|jittery|rattling|shuddery|hiccuping|spasmodic|uneven|restless|rough-cut)\b/i, weight: 2 },
+      // Messy and wild
+      { pattern: /\b(wild|untamed|feral|unruly|frantic|feverish|breathless|reckless|unbridled|stormy|raging|torrential|uncontained|runaway|spiraling|exploding|volatile|rabid|savage)\b/i, weight: 2 },
+      // Punchy and percussive
+      { pattern: /\b(snappy|punchy|percussive|popping|cracking|hammering|hitting|striking|jabbing|driving|slamming|thudding|hard-edged|sharp|brisk-cut|clipped|emphatic|accented|spiky)\b/i, weight: 2 }
     ]
   });
 
@@ -368,6 +372,14 @@ function inferPatternFromScoring(text) {
   }
   if (context.total > 0) {
     patternScores.ramp += context.total;
+  }
+
+  // Thematic nudges for special motif variants.
+  if (/\b(teasing|flirty|coy|mischievous|cheeky|playful|impish|sly|puckish|kittenish|bubbly|bouncy|lighthearted|sing-song|winking|taunting|baiting|ticklish|feathering|skimming)\b/i.test(text)) {
+    patternScores.wave += 2;
+  }
+  if (/\b(snappy|punchy|percussive|popping|cracking|hammering|jabbing|slamming|thudding|clipped|spiky)\b/i.test(text)) {
+    patternScores.pulse += 2;
   }
 
   const scored = pickHighestScore(patternScores, null, 2);

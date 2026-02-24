@@ -50,6 +50,11 @@
   -webkit-text-fill-color: #000;
 }
 
+.tavernplug-row select {
+  width: 100%;
+  color: #000;
+}
+
 .tavernplug-inline {
   display: flex;
   align-items: center;
@@ -187,6 +192,12 @@
   color: #fff;
 }
 
+.tavernplug-quick-cum {
+  background: #8a2323;
+  border-color: #8a2323;
+  color: #fff;
+}
+
 .tavernplug-quick-stop-inline {
   margin-left: 8px;
 }
@@ -195,6 +206,13 @@
   position: fixed;
   right: 14px;
   bottom: 14px;
+  z-index: 9999;
+}
+
+.tavernplug-quick-cum-floating {
+  position: fixed;
+  right: 14px;
+  bottom: 54px;
   z-index: 9999;
 }
 
