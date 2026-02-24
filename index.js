@@ -4,6 +4,7 @@ const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   pollIntervalMs: 2000,
   autoSend: true,
+  paused: false,
   strictTagOnly: false,
   advancedOpen: false,
   holdUntilNextCommand: true,
@@ -24,6 +25,9 @@ const DEFAULTS = {
   handyConnectionKey: "",
   globalStrokeMinPct: 0,
   globalStrokeMaxPct: 75,
+  physicalMinPct: 0,
+  physicalMaxPct: 100,
+  invertStroke: false,
   strokeRange: 100,
   speedMin: 0,
   speedMax: 75,
@@ -69,13 +73,17 @@ normalizePercentSetting("testSpeedIntensePct");
 normalizePercentSetting("cumSpeedPct");
 normalizePercentSetting("globalStrokeMinPct");
 normalizePercentSetting("globalStrokeMaxPct");
+normalizePercentSetting("physicalMinPct");
+normalizePercentSetting("physicalMaxPct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
 let lastSentMessageSignature = "";
 let pollHandle = null;
+let healthHandle = null;
 let statusEl = null;
 let modeStateEl = null;
+let healthEl = null;
 let panelRetryHandle = null;
 let testModeActive = false;
 let testModeStyle = "normal";
@@ -110,9 +118,14 @@ function setStatus(message) {
   if (statusEl) statusEl.textContent = message;
 }
 
+function setHealth(message) {
+  if (healthEl) healthEl.textContent = message;
+}
+
 function updateModeStateLine() {
   if (!modeStateEl) return;
   modeStateEl.textContent = [
+    `Paused: ${settings.paused ? "ON" : "OFF"}`,
     `Strict: ${settings.strictTagOnly ? "ON" : "OFF"}`,
     `Hold: ${settings.holdUntilNextCommand ? "ON" : "OFF"}`,
     `Safe: ${settings.safeMode ? "ON" : "OFF"}`,
@@ -230,6 +243,17 @@ async function postJson(path, payload) {
   return data;
 }
 
+async function fetchHealth() {
+  const base = String(settings.bridgeUrl || DEFAULTS.bridgeUrl).replace(/\/$/, "");
+  const response = await fetch(`${base}/health`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data?.error || `Health failed (${response.status})`;
+    throw new Error(message);
+  }
+  return data;
+}
+
 function getAssistantMessageFromContext() {
   const context = getContextSafe();
   const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -249,6 +273,9 @@ async function syncConfig() {
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
     globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
     globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
+    physicalMin: clampPercent(settings.physicalMinPct) / 100,
+    physicalMax: clampPercent(settings.physicalMaxPct) / 100,
+    invertStroke: Boolean(settings.invertStroke),
     strokeRange: clampPercent(settings.strokeRange) / 100,
     speedMin: clampPercent(settings.speedMin) / 100,
     speedMax: clampPercent(settings.speedMax) / 100,
@@ -270,6 +297,7 @@ async function syncConfig() {
 
 async function sendMotionIfNeeded(message) {
   if (!settings.autoSend || !message) return;
+  if (settings.paused) return;
   const text = String(message.text ?? "");
   const now = Date.now();
 
@@ -333,7 +361,9 @@ function onInputChange(event) {
       "testSpeedIntensePct",
       "cumSpeedPct",
       "globalStrokeMinPct",
-      "globalStrokeMaxPct"
+      "globalStrokeMaxPct",
+      "physicalMinPct",
+      "physicalMaxPct"
     ].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
@@ -346,6 +376,12 @@ function onInputChange(event) {
   }
   if (name === "globalStrokeMaxPct" && Number(settings.globalStrokeMaxPct) < Number(settings.globalStrokeMinPct)) {
     settings.globalStrokeMinPct = settings.globalStrokeMaxPct;
+  }
+  if (name === "physicalMinPct" && Number(settings.physicalMinPct) > Number(settings.physicalMaxPct)) {
+    settings.physicalMaxPct = settings.physicalMinPct;
+  }
+  if (name === "physicalMaxPct" && Number(settings.physicalMaxPct) < Number(settings.physicalMinPct)) {
+    settings.physicalMinPct = settings.physicalMaxPct;
   }
   if (name === "speedMin" && Number(settings.speedMin) > Number(settings.speedMax)) {
     settings.speedMax = settings.speedMin;
@@ -389,7 +425,9 @@ function onInputChange(event) {
     "testSpeedHardPct",
     "testSpeedIntensePct",
     "globalStrokeMinPct",
-    "globalStrokeMaxPct"
+    "globalStrokeMaxPct",
+    "physicalMinPct",
+    "physicalMaxPct"
   ].includes(name);
   const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
   if (name === "globalStrokeMinPct" || name === "globalStrokeMaxPct") {
@@ -435,7 +473,41 @@ async function handleEmergencyStop() {
   }
 }
 
+function updateQuickPauseButton() {
+  const button = document.querySelector(`#${EXTENSION_NAME}-quick-pause`);
+  if (!button) return;
+  if (settings.paused) {
+    button.textContent = "Resume";
+    button.classList.add("tavernplug-quick-pause-on");
+  } else {
+    button.textContent = "Pause";
+    button.classList.remove("tavernplug-quick-pause-on");
+  }
+}
+
+async function togglePause() {
+  settings.paused = !settings.paused;
+  saveSettings();
+  updateModeStateLine();
+  updateQuickPauseButton();
+  if (settings.paused) {
+    try {
+      stopPatternMode(false);
+      await postJson("/emergency-stop", {});
+      setStatus("Paused: motion stopped");
+    } catch (error) {
+      setStatus(`Pause error: ${error.message}`);
+    }
+    return;
+  }
+  setStatus("Resumed");
+}
+
 async function handleParkHold() {
+  if (settings.paused) {
+    setStatus("Paused: park action blocked");
+    return;
+  }
   try {
     stopPatternMode(false);
     await postJson("/park-hold", {});
@@ -458,6 +530,10 @@ function clampCumDepth(raw) {
 }
 
 async function handleCumAction() {
+  if (settings.paused) {
+    setStatus("Paused: cum action blocked");
+    return;
+  }
   const style = clampCumStyle(settings.cumStyle);
   const depth = clampCumDepth(settings.cumDepth);
   const speed = clampPercent(settings.cumSpeedPct);
@@ -474,6 +550,10 @@ async function handleCumAction() {
 }
 
 async function startTestMode() {
+  if (settings.paused) {
+    setStatus("Paused: test mode blocked");
+    return;
+  }
   const testButton = document.querySelector(`#${EXTENSION_NAME}-test`);
   preTestHoldSetting = Boolean(settings.holdUntilNextCommand);
   settings.holdUntilNextCommand = true;
@@ -594,6 +674,10 @@ function nextPatternFrame(name, step) {
 }
 
 async function startPatternMode(name) {
+  if (settings.paused) {
+    setStatus("Paused: pattern blocked");
+    return;
+  }
   if (!testModeActive) {
     await startTestMode();
   }
@@ -682,6 +766,10 @@ function adjustStyleSpeed(style, delta) {
 }
 
 async function sendModeTest(style, depth) {
+  if (settings.paused) {
+    setStatus("Paused: mode test blocked");
+    return;
+  }
   testModeStyle = style;
   testModeDepth = depth;
   const speed = currentStyleSpeed(style);
@@ -765,6 +853,18 @@ function renderSettingsPanel() {
         <input class="tavernplug-range-max" type="range" step="1" min="0" max="100" name="speedMax" value="${settings.speedMax}" />
       </div>
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
+    </div>
+    <div class="tavernplug-row">
+      <label>Physical Stroke Window (0-100)</label>
+      <div class="tavernplug-inline">
+        <input type="number" step="1" min="0" max="100" name="physicalMinPct" value="${settings.physicalMinPct}" />
+        <span>to</span>
+        <input type="number" step="1" min="0" max="100" name="physicalMaxPct" value="${settings.physicalMaxPct}" />
+      </div>
+      <label>
+        <input type="checkbox" name="invertStroke" ${settings.invertStroke ? "checked" : ""} />
+        Invert Stroke Direction
+      </label>
     </div>
     <div class="tavernplug-row">
       <label>Pattern Interval (ms)</label>
@@ -911,6 +1011,7 @@ function renderSettingsPanel() {
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-modes">Modes</div>
+    <div class="tavernplug-status" id="${EXTENSION_NAME}-health">Bridge: unknown</div>
     <div class="tavernplug-status" id="${EXTENSION_NAME}-status">Idle</div>
     </div>
   `;
@@ -1060,8 +1161,10 @@ function renderSettingsPanel() {
 
   container.append(panel);
   modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);
+  healthEl = panel.querySelector(`#${EXTENSION_NAME}-health`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
   updateModeStateLine();
+  updateQuickPauseButton();
 }
 
 function ensurePanelMounted() {
@@ -1087,19 +1190,9 @@ function ensurePanelMounted() {
 
 function mountQuickStopButton() {
   if (
-    document.querySelector(`#${EXTENSION_NAME}-quick-stop`)
+    document.querySelector(`#${EXTENSION_NAME}-quick-pause`)
     && document.querySelector(`#${EXTENSION_NAME}-quick-cum`)
   ) return true;
-
-  const stopButton = document.createElement("button");
-  stopButton.id = `${EXTENSION_NAME}-quick-stop`;
-  stopButton.type = "button";
-  stopButton.className = "menu_button tavernplug-quick-stop";
-  stopButton.textContent = "Emergency Stop";
-  stopButton.title = "Immediate stop for Handy motion";
-  stopButton.addEventListener("click", () => {
-    void handleEmergencyStop();
-  });
 
   const cumButton = document.createElement("button");
   cumButton.id = `${EXTENSION_NAME}-quick-cum`;
@@ -1111,19 +1204,31 @@ function mountQuickStopButton() {
     void handleCumAction();
   });
 
+  const pauseButton = document.createElement("button");
+  pauseButton.id = `${EXTENSION_NAME}-quick-pause`;
+  pauseButton.type = "button";
+  pauseButton.className = "menu_button tavernplug-quick-pause";
+  pauseButton.textContent = settings.paused ? "Resume" : "Pause";
+  pauseButton.title = "Pause/resume all TavernPlug motion actions";
+  pauseButton.addEventListener("click", () => {
+    void togglePause();
+  });
+
   const container = findQuickStopContainer();
   if (container) {
-    stopButton.classList.add("tavernplug-quick-stop-inline");
+    pauseButton.classList.add("tavernplug-quick-stop-inline");
     cumButton.classList.add("tavernplug-quick-stop-inline");
-    container.append(stopButton);
+    container.append(pauseButton);
     container.append(cumButton);
+    updateQuickPauseButton();
     return true;
   }
 
-  stopButton.classList.add("tavernplug-quick-stop-floating");
+  pauseButton.classList.add("tavernplug-quick-pause-floating");
   cumButton.classList.add("tavernplug-quick-cum-floating");
-  document.body.append(stopButton);
+  document.body.append(pauseButton);
   document.body.append(cumButton);
+  updateQuickPauseButton();
   return true;
 }
 
@@ -1146,6 +1251,25 @@ function startPolling() {
   }, intervalMs);
 }
 
+function startHealthPolling() {
+  if (healthHandle) return;
+  const run = async () => {
+    try {
+      const health = await fetchHealth();
+      const connected = health?.controller?.connected ? "connected" : "disconnected";
+      const device = health?.controller?.selectedDevice || "none";
+      const active = health?.motionLikelyActive ? "active" : "idle";
+      setHealth(`Bridge: ${connected} | Device: ${device} | Motion: ${active}`);
+    } catch (_error) {
+      setHealth("Bridge: offline");
+    }
+  };
+  healthHandle = setInterval(() => {
+    void run();
+  }, 4000);
+  void run();
+}
+
 function restartPolling() {
   if (pollHandle) {
     clearInterval(pollHandle);
@@ -1163,6 +1287,7 @@ function init() {
   ensurePanelMounted();
   ensureQuickStopMounted();
   startPolling();
+  startHealthPolling();
   void syncConfig();
 }
 

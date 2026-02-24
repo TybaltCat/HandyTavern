@@ -37,6 +37,10 @@ const controller = new HandyController({
   deviceNameFilter: process.env.DEVICE_NAME_FILTER ?? "handy",
   clientName: process.env.CLIENT_NAME ?? "TavernPlug"
 });
+const DEADMAN_TIMEOUT_MS = Math.max(
+  5000,
+  Number(process.env.DEADMAN_TIMEOUT_MS ?? 45000)
+);
 
 let ready = false;
 const patternState = {
@@ -48,12 +52,19 @@ const patternState = {
   frameBusy: false
 };
 let motionRunToken = 0;
+let lastMotionCommandAt = 0;
+let motionLikelyActive = false;
+let deadmanEngaged = false;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
   globalStrokeMin: Number(process.env.GLOBAL_STROKE_MIN ?? 0),
   globalStrokeMax: Number(process.env.GLOBAL_STROKE_MAX ?? 1),
+  physicalMin: Number(process.env.PHYSICAL_MIN ?? 0),
+  physicalMax: Number(process.env.PHYSICAL_MAX ?? 1),
+  invertStroke:
+    String(process.env.INVERT_STROKE ?? "false").toLowerCase() === "true",
   speedMin: Number(process.env.SPEED_MIN ?? 0),
   speedMax: Number(process.env.SPEED_MAX ?? 1),
   minimumAllowedStroke: Number(process.env.MINIMUM_ALLOWED_STROKE ?? 0),
@@ -100,6 +111,18 @@ function sanitizeMotionConfig(input) {
       input.globalStrokeMax === undefined
         ? motionConfig.globalStrokeMax
         : Number(input.globalStrokeMax),
+    physicalMin:
+      input.physicalMin === undefined
+        ? motionConfig.physicalMin
+        : Number(input.physicalMin),
+    physicalMax:
+      input.physicalMax === undefined
+        ? motionConfig.physicalMax
+        : Number(input.physicalMax),
+    invertStroke:
+      input.invertStroke === undefined
+        ? motionConfig.invertStroke
+        : parseBoolean(input.invertStroke, motionConfig.invertStroke),
     speedMin:
       input.speedMin === undefined ? motionConfig.speedMin : Number(input.speedMin),
     speedMax:
@@ -142,6 +165,12 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.globalStrokeMax)) {
     throw new Error("globalStrokeMax must be a number between 0 and 1");
   }
+  if (!Number.isFinite(next.physicalMin)) {
+    throw new Error("physicalMin must be a number between 0 and 1");
+  }
+  if (!Number.isFinite(next.physicalMax)) {
+    throw new Error("physicalMax must be a number between 0 and 1");
+  }
   if (!Number.isFinite(next.speedMax)) {
     throw new Error("speedMax must be a number between 0 and 1");
   }
@@ -155,6 +184,8 @@ function sanitizeMotionConfig(input) {
   next.strokeRange = clamp01(next.strokeRange);
   next.globalStrokeMin = clamp01(next.globalStrokeMin);
   next.globalStrokeMax = clamp01(next.globalStrokeMax);
+  next.physicalMin = clamp01(next.physicalMin);
+  next.physicalMax = clamp01(next.physicalMax);
   next.speedMin = clamp01(next.speedMin);
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
@@ -169,6 +200,11 @@ function sanitizeMotionConfig(input) {
     const tmp = next.globalStrokeMin;
     next.globalStrokeMin = next.globalStrokeMax;
     next.globalStrokeMax = tmp;
+  }
+  if (next.physicalMax < next.physicalMin) {
+    const tmp = next.physicalMin;
+    next.physicalMin = next.physicalMax;
+    next.physicalMax = tmp;
   }
   if (next.safeMode) {
     next.speedMin = Math.min(next.speedMin, 0.75);
@@ -191,6 +227,17 @@ function applySafeModeToMotion(motion, config) {
 
 function cancelMotionRunner() {
   motionRunToken += 1;
+}
+
+function markMotionCommand() {
+  lastMotionCommandAt = Date.now();
+  motionLikelyActive = true;
+  deadmanEngaged = false;
+}
+
+function markMotionStopped() {
+  motionLikelyActive = false;
+  deadmanEngaged = false;
 }
 
 function startMotionRunner(runMotion, config) {
@@ -435,14 +482,22 @@ async function ensureReady() {
   if (ready && controller.client?.connected === true) return;
   // eslint-disable-next-line no-console
   console.log("[device] connecting to buttplug server...");
-  await controller.connect();
+  await controller.connectWithRetry();
   ready = true;
   // eslint-disable-next-line no-console
   console.log("[device] connected and scanning started");
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, deviceEnabled: enabled, ready });
+  res.json({
+    ok: true,
+    deviceEnabled: enabled,
+    ready,
+    deadmanTimeoutMs: DEADMAN_TIMEOUT_MS,
+    motionLikelyActive,
+    lastMotionCommandAt,
+    controller: controller.getStatus()
+  });
 });
 
 app.get("/config", (_req, res) => {
@@ -471,6 +526,7 @@ app.post("/emergency-stop", async (_req, res) => {
     if (enabled) {
       await controller.stopNow({ cancelPending: true });
     }
+    markMotionStopped();
     return res.json({ ok: true, simulated: !enabled });
   } catch (error) {
     return res.status(500).json({
@@ -486,8 +542,9 @@ app.post("/park-hold", async (_req, res) => {
     cancelMotionRunner();
     await ensureReady();
     if (enabled) {
-      await controller.parkAtZero();
+      await controller.parkAtZero(motionConfig);
     }
+    markMotionStopped();
     return res.json({ ok: true, simulated: !enabled, parked: true, position: 0 });
   } catch (error) {
     return res.status(500).json({
@@ -523,6 +580,7 @@ app.post("/motion", async (req, res) => {
       try {
         stopPatternRunner();
         await controller.stopNow({ cancelPending: true });
+        markMotionStopped();
         // eslint-disable-next-line no-console
         console.log("[pattern] stop trigger received");
         return res.json({
@@ -549,6 +607,7 @@ app.post("/motion", async (req, res) => {
         await startPatternRunner(patternTrigger, {
           repeatWindows: !Boolean(patternTrigger.auto)
         });
+        markMotionCommand();
       }
       return res.json({
         accepted: true,
@@ -605,6 +664,7 @@ app.post("/motion", async (req, res) => {
         `safeMode=${motionConfig.safeMode} holdUntilNextCommand=${motionConfig.holdUntilNextCommand}`
       );
       startMotionRunner(runMotion, motionConfig);
+      markMotionCommand();
     }
 
     return res.json({
@@ -664,6 +724,9 @@ app.post("/preview-motion", (req, res) => {
         strokeRange: motionConfig.strokeRange,
         globalStrokeMin: motionConfig.globalStrokeMin,
         globalStrokeMax: motionConfig.globalStrokeMax,
+        physicalMin: motionConfig.physicalMin,
+        physicalMax: motionConfig.physicalMax,
+        invertStroke: motionConfig.invertStroke,
         minimumAllowedStroke: motionConfig.minimumAllowedStroke,
         safeMode: motionConfig.safeMode,
         safeMaxSpeed: motionConfig.safeMaxSpeed,
@@ -703,6 +766,9 @@ app.post("/preview-motion", (req, res) => {
       strokeRange: motionConfig.strokeRange,
       globalStrokeMin: motionConfig.globalStrokeMin,
       globalStrokeMax: motionConfig.globalStrokeMax,
+      physicalMin: motionConfig.physicalMin,
+      physicalMax: motionConfig.physicalMax,
+      invertStroke: motionConfig.invertStroke,
       minimumAllowedStroke: motionConfig.minimumAllowedStroke,
       safeMode: motionConfig.safeMode,
       safeMaxSpeed: motionConfig.safeMaxSpeed,
@@ -719,6 +785,28 @@ const server = app.listen(port, () => {
     `[config] ENABLE_DEVICE=${enabled} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} DEVICE_NAME_FILTER=${process.env.DEVICE_NAME_FILTER ?? "handy"}`
   );
 });
+
+setInterval(async () => {
+  if (!enabled || !motionLikelyActive || deadmanEngaged) return;
+  if (!lastMotionCommandAt) return;
+  const ageMs = Date.now() - lastMotionCommandAt;
+  if (ageMs < DEADMAN_TIMEOUT_MS) return;
+
+  deadmanEngaged = true;
+  try {
+    // eslint-disable-next-line no-console
+    console.warn(`[safety] deadman timeout (${ageMs}ms); stopping and parking.`);
+    stopPatternRunner();
+    cancelMotionRunner();
+    await controller.stopNow({ cancelPending: true });
+    await controller.parkAtZero(motionConfig);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("[safety] deadman handler error:", error);
+  } finally {
+    markMotionStopped();
+  }
+}, 1000);
 
 if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
   process.stdin.setEncoding("utf8");
