@@ -2,6 +2,8 @@ const EXTENSION_NAME = "tavernplug-handy";
 // Add new extension-level settings defaults here.
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
+  controllerMode: "buttplug",
+  handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   pollIntervalMs: 2000,
   autoSend: true,
   paused: false,
@@ -127,6 +129,7 @@ function setHealth(message) {
 function updateModeStateLine() {
   if (!modeStateEl) return;
   modeStateEl.textContent = [
+    `Mode: ${settings.controllerMode === "handy-native" ? "Native" : "Buttplug"}`,
     `Paused: ${settings.paused ? "ON" : "OFF"}`,
     `Strict: ${settings.strictTagOnly ? "ON" : "OFF"}`,
     `Hold: ${settings.holdUntilNextCommand ? "ON" : "OFF"}`,
@@ -272,6 +275,8 @@ function getAssistantMessageFromContext() {
 async function syncConfig() {
   // Keep this payload aligned with POST /config in src/index.js.
   const payload = {
+    controllerMode: String(settings.controllerMode ?? "buttplug"),
+    handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
     globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
     globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
@@ -351,6 +356,15 @@ function onInputChange(event) {
   }
 
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
+  if (name === "controllerMode") {
+    settings[name] = String(settings[name]).toLowerCase() === "handy-native"
+      ? "handy-native"
+      : "buttplug";
+    updateModeStateLine();
+  }
+  if (name === "handyApiBaseUrl") {
+    settings[name] = String(settings[name] || "").trim();
+  }
   if (
     type === "number" &&
     [
@@ -844,6 +858,13 @@ function renderSettingsPanel() {
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
+      <label>Controller Backend</label>
+      <select name="controllerMode">
+        <option value="buttplug" ${settings.controllerMode === "buttplug" ? "selected" : ""}>Buttplug (Intiface/Bluetooth)</option>
+        <option value="handy-native" ${settings.controllerMode === "handy-native" ? "selected" : ""}>Handy Native (Wi-Fi)</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
       <div class="tavernplug-global-range">
         <input class="tavernplug-range-min" type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
@@ -879,6 +900,14 @@ function renderSettingsPanel() {
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
     </div>
     <div class="tavernplug-advanced-body" style="display:none;">
+    <div class="tavernplug-row">
+      <label>Handy Native API Base URL</label>
+      <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Handy Connection Key</label>
+      <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
+    </div>
     <div class="tavernplug-row">
       <label>Cum Button Style</label>
       <select name="cumStyle">
@@ -1265,7 +1294,8 @@ function startHealthPolling() {
       const connected = health?.controller?.connected ? "connected" : "disconnected";
       const device = health?.controller?.selectedDevice || "none";
       const active = health?.motionLikelyActive ? "active" : "idle";
-      setHealth(`Bridge: ${connected} | Device: ${device} | Motion: ${active}`);
+      const mode = health?.controllerMode || settings.controllerMode || "buttplug";
+      setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
     } catch (error) {
       healthFailureCount += 1;
       setHealth("Bridge: offline");

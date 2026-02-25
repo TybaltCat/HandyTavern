@@ -7,6 +7,7 @@ import {
   parsePatternTrigger
 } from "./motionParser.js";
 import { HandyController } from "./handyController.js";
+import { HandyNativeController } from "./handyNativeController.js";
 
 const app = express();
 // Allow local browser calls from SillyTavern UI to this local bridge.
@@ -32,11 +33,19 @@ const enabled = String(process.env.ENABLE_DEVICE ?? "false").toLowerCase() === "
 let strictMotionTagRuntime =
   String(process.env.STRICT_MOTION_TAG ?? "true").toLowerCase() === "true";
 
-const controller = new HandyController({
+const buttplugController = new HandyController({
   serverUrl: process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345",
   deviceNameFilter: process.env.DEVICE_NAME_FILTER ?? "handy",
   clientName: process.env.CLIENT_NAME ?? "TavernPlug"
 });
+const nativeController = new HandyNativeController({
+  apiBaseUrl: process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
+  clientName: process.env.CLIENT_NAME ?? "TavernPlug"
+});
+const controllers = {
+  buttplug: buttplugController,
+  "handy-native": nativeController
+};
 const DEADMAN_TIMEOUT_MS = Math.max(
   5000,
   Number(process.env.DEADMAN_TIMEOUT_MS ?? 300000)
@@ -59,7 +68,13 @@ let motionLikelyActive = false;
 let deadmanEngaged = false;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
+  controllerMode:
+    String(process.env.CONTROLLER_MODE ?? "buttplug").toLowerCase() === "handy-native"
+      ? "handy-native"
+      : "buttplug",
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
+  handyApiBaseUrl:
+    process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
   globalStrokeMin: Number(process.env.GLOBAL_STROKE_MIN ?? 0),
   globalStrokeMax: Number(process.env.GLOBAL_STROKE_MAX ?? 1),
@@ -94,13 +109,29 @@ function parseBoolean(value, fallback) {
   return Boolean(value);
 }
 
+function getControllerMode(mode) {
+  return mode === "handy-native" ? "handy-native" : "buttplug";
+}
+
+function getActiveController(config = motionConfig) {
+  return controllers[getControllerMode(config.controllerMode)] ?? buttplugController;
+}
+
 function sanitizeMotionConfig(input) {
   // Add new user-adjustable variables here and clamp/validate below.
   const next = {
+    controllerMode:
+      input.controllerMode === undefined
+        ? motionConfig.controllerMode
+        : getControllerMode(String(input.controllerMode).toLowerCase()),
     handyConnectionKey:
       input.handyConnectionKey === undefined
         ? motionConfig.handyConnectionKey
         : String(input.handyConnectionKey ?? "").trim(),
+    handyApiBaseUrl:
+      input.handyApiBaseUrl === undefined
+        ? motionConfig.handyApiBaseUrl
+        : String(input.handyApiBaseUrl ?? "").trim(),
     strokeRange:
       input.strokeRange === undefined
         ? motionConfig.strokeRange
@@ -182,6 +213,9 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.safeMaxSpeed)) {
     throw new Error("safeMaxSpeed must be a number between 0 and 1");
   }
+  if (!next.handyApiBaseUrl) {
+    throw new Error("handyApiBaseUrl must be a non-empty URL");
+  }
 
   next.strokeRange = clamp01(next.strokeRange);
   next.globalStrokeMin = clamp01(next.globalStrokeMin);
@@ -192,6 +226,7 @@ function sanitizeMotionConfig(input) {
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
   next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
+  next.controllerMode = getControllerMode(next.controllerMode);
 
   if (next.speedMax < next.speedMin) {
     const tmp = next.speedMin;
@@ -244,29 +279,17 @@ function markMotionStopped() {
 
 function startMotionRunner(runMotion, config) {
   const token = ++motionRunToken;
-  const cfg = {
-    stopPreviousOnNewMotion: config.stopPreviousOnNewMotion,
-    holdUntilNextCommand: config.holdUntilNextCommand
-  };
+  const controller = getActiveController(config);
 
   const loop = async () => {
-    if (cfg.holdUntilNextCommand) {
-      await controller.runMotion(runMotion, config, {
-        stopPreviousOnNewMotion: true,
-        holdUntilNextCommand: true
-      });
-      return;
-    }
-
-    let firstPass = true;
-    while (token === motionRunToken) {
-      await controller.runMotion(runMotion, config, {
-        stopPreviousOnNewMotion: firstPass,
-        holdUntilNextCommand: false
-      });
-      firstPass = false;
-      if (token !== motionRunToken) return;
-    }
+    if (token !== motionRunToken) return;
+    // Keep one continuous linear loop alive until preempted/stopped.
+    // This avoids duration-window boundary restarts that cause jitter spikes.
+    await controller.runMotion(runMotion, config, {
+      stopPreviousOnNewMotion: true,
+      holdUntilNextCommand: true,
+      stopAtEnd: false
+    });
   };
 
   void loop().catch((error) => {
@@ -403,6 +426,7 @@ function stopPatternRunner() {
 }
 
 async function runPatternFrame(trigger) {
+  const controller = getActiveController(motionConfig);
   const frame = nextPatternFrame(trigger.pattern, patternState.step);
   const rawMotion = {
     style: frame.style,
@@ -481,24 +505,32 @@ async function startPatternRunner(trigger, options = {}) {
 
 async function ensureReady() {
   if (!enabled) return;
-  if (ready && controller.client?.connected === true) return;
+  const controller = getActiveController(motionConfig);
+  const status = controller.getStatus?.() ?? {};
+  if (ready && status.connected === true) return;
   // eslint-disable-next-line no-console
-  console.log("[device] connecting to buttplug server...");
-  await controller.connectWithRetry();
+  console.log(`[device] connecting (${motionConfig.controllerMode})...`);
+  await controller.connectWithRetry(motionConfig);
   ready = true;
   // eslint-disable-next-line no-console
-  console.log("[device] connected and scanning started");
+  console.log(`[device] connected (${motionConfig.controllerMode})`);
 }
 
 app.get("/health", (_req, res) => {
+  const activeController = getActiveController(motionConfig);
   res.json({
     ok: true,
     deviceEnabled: enabled,
     ready,
+    controllerMode: motionConfig.controllerMode,
     deadmanTimeoutMs: DEADMAN_TIMEOUT_MS,
     motionLikelyActive,
     lastMotionCommandAt,
-    controller: controller.getStatus()
+    controller: activeController.getStatus(),
+    controllers: {
+      buttplug: buttplugController.getStatus(),
+      "handy-native": nativeController.getStatus()
+    }
   });
 });
 
@@ -509,8 +541,19 @@ app.get("/config", (_req, res) => {
 app.post("/config", (req, res) => {
   try {
     // Central place where extension UI values are validated before use.
+    const previousMode = motionConfig.controllerMode;
+    const previousApiUrl = motionConfig.handyApiBaseUrl;
+    const previousConnectionKey = motionConfig.handyConnectionKey;
     motionConfig = sanitizeMotionConfig(req.body ?? {});
+    nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
     strictMotionTagRuntime = motionConfig.strictMotionTag;
+    if (
+      previousMode !== motionConfig.controllerMode
+      || previousApiUrl !== motionConfig.handyApiBaseUrl
+      || previousConnectionKey !== motionConfig.handyConnectionKey
+    ) {
+      ready = false;
+    }
     return res.json({ ok: true, config: motionConfig });
   } catch (error) {
     return res.status(400).json({
@@ -522,11 +565,12 @@ app.post("/config", (req, res) => {
 
 app.post("/emergency-stop", async (_req, res) => {
   try {
+    const controller = getActiveController(motionConfig);
     stopPatternRunner();
     cancelMotionRunner();
     await ensureReady();
     if (enabled) {
-      await controller.stopNow({ cancelPending: true });
+      await controller.stopNow({ cancelPending: true }, motionConfig);
     }
     markMotionStopped();
     return res.json({ ok: true, simulated: !enabled });
@@ -540,6 +584,7 @@ app.post("/emergency-stop", async (_req, res) => {
 
 app.post("/park-hold", async (_req, res) => {
   try {
+    const controller = getActiveController(motionConfig);
     stopPatternRunner();
     cancelMotionRunner();
     await ensureReady();
@@ -562,6 +607,7 @@ app.post("/motion", async (req, res) => {
     return res.status(400).json({ error: "Missing text" });
   }
   logMotionDebug(text);
+  const controller = getActiveController(motionConfig);
 
   let patternTrigger = null;
   try {
@@ -581,7 +627,7 @@ app.post("/motion", async (req, res) => {
     if (patternTrigger.stop) {
       try {
         stopPatternRunner();
-        await controller.stopNow({ cancelPending: true });
+        await controller.stopNow({ cancelPending: true }, motionConfig);
         markMotionStopped();
         // eslint-disable-next-line no-console
         console.log("[pattern] stop trigger received");
@@ -721,6 +767,9 @@ app.post("/preview-motion", (req, res) => {
       strictMotionTag: strictMotionTagRuntime,
       pattern: patternTrigger,
       configSnapshot: {
+        controllerMode: motionConfig.controllerMode,
+        handyApiBaseUrl: motionConfig.handyApiBaseUrl,
+        handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
         speedMin: motionConfig.speedMin,
         speedMax: motionConfig.speedMax,
         strokeRange: motionConfig.strokeRange,
@@ -763,6 +812,9 @@ app.post("/preview-motion", (req, res) => {
     strictMotionTag: strictMotionTagRuntime,
     motion: runMotion,
     configSnapshot: {
+      controllerMode: motionConfig.controllerMode,
+      handyApiBaseUrl: motionConfig.handyApiBaseUrl,
+      handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
       speedMin: motionConfig.speedMin,
       speedMax: motionConfig.speedMax,
       strokeRange: motionConfig.strokeRange,
@@ -784,12 +836,13 @@ const server = app.listen(port, () => {
   console.log(`TavernPlug listening on http://127.0.0.1:${port}`);
   // eslint-disable-next-line no-console
   console.log(
-    `[config] ENABLE_DEVICE=${enabled} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} DEVICE_NAME_FILTER=${process.env.DEVICE_NAME_FILTER ?? "handy"}`
+    `[config] ENABLE_DEVICE=${enabled} CONTROLLER_MODE=${motionConfig.controllerMode} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} HANDY_API_BASE_URL=${motionConfig.handyApiBaseUrl}`
   );
 
   if (enabled && PARK_ON_START) {
     void (async () => {
       try {
+        const controller = getActiveController(motionConfig);
         await ensureReady();
         await controller.parkAtZero(motionConfig);
         markMotionStopped();
@@ -811,11 +864,12 @@ setInterval(async () => {
 
   deadmanEngaged = true;
   try {
+    const controller = getActiveController(motionConfig);
     // eslint-disable-next-line no-console
     console.warn(`[safety] deadman timeout (${ageMs}ms); stopping and parking.`);
     stopPatternRunner();
     cancelMotionRunner();
-    await controller.stopNow({ cancelPending: true });
+    await controller.stopNow({ cancelPending: true }, motionConfig);
     await controller.parkAtZero(motionConfig);
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -845,11 +899,12 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
 
     if (patternTrigger) {
       if (patternTrigger.stop) {
+        const controller = getActiveController(motionConfig);
         // eslint-disable-next-line no-console
         console.log("pattern parsed:", patternTrigger);
         stopPatternRunner();
         try {
-          await controller.stopNow({ cancelPending: true });
+          await controller.stopNow({ cancelPending: true }, motionConfig);
         } catch (_error) {
           // Best-effort stop.
         }
