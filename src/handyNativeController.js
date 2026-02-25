@@ -174,8 +174,22 @@ export class HandyNativeController {
 
   async sendHdspXpt(position01, durationMs, motionConfig = {}) {
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
-    const xpt = Math.round(clamp01(position01) * 10000) / 100; // 0..100 with 2 decimals
+    const endpointPad = Math.max(
+      0,
+      Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03))
+    );
+    const safePosition = clamp01(
+      Math.max(endpointPad, Math.min(1 - endpointPad, position01))
+    );
+    const scale = String(motionConfig.handyNativePositionScale ?? "percent").toLowerCase();
+    const xpt = scale === "unit"
+      ? Math.round(safePosition * 10000) / 10000 // 0..1
+      : Math.round(safePosition * 10000) / 100; // 0..100
     const t = Math.max(1, Math.round(durationMs));
+    // eslint-disable-next-line no-console
+    console.log(
+      `[native] xpt=${xpt} scale=${scale} t=${t} pad=${Math.round(endpointPad * 100)}%`
+    );
     // Common payload for HDSP percent+time endpoint.
     await this.request("/hdsp/xpt", key, "PUT", { xpt, t, stopOnTarget: false });
   }

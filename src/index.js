@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   getMotionDebug,
   hasMotionIntent,
@@ -52,6 +54,9 @@ const DEADMAN_TIMEOUT_MS = Math.max(
 );
 const PARK_ON_START =
   String(process.env.PARK_ON_START ?? "true").toLowerCase() === "true";
+const CONFIG_FILE_PATH =
+  process.env.CONFIG_PATH
+  || path.resolve(process.cwd(), "tavernplug.config.json");
 
 let ready = false;
 const patternState = {
@@ -75,6 +80,10 @@ let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
   handyApiBaseUrl:
     process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
+  handyNativePositionScale:
+    String(process.env.HANDY_NATIVE_POSITION_SCALE ?? "percent").toLowerCase() === "unit"
+      ? "unit"
+      : "percent",
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
   globalStrokeMin: Number(process.env.GLOBAL_STROKE_MIN ?? 0),
   globalStrokeMax: Number(process.env.GLOBAL_STROKE_MAX ?? 1),
@@ -133,6 +142,10 @@ function sanitizeMotionConfig(input) {
       input.handyApiBaseUrl === undefined
         ? motionConfig.handyApiBaseUrl
         : String(input.handyApiBaseUrl ?? "").trim(),
+    handyNativePositionScale:
+      input.handyNativePositionScale === undefined
+        ? motionConfig.handyNativePositionScale
+        : String(input.handyNativePositionScale ?? "").trim().toLowerCase(),
     strokeRange:
       input.strokeRange === undefined
         ? motionConfig.strokeRange
@@ -224,6 +237,9 @@ function sanitizeMotionConfig(input) {
   if (!next.handyApiBaseUrl) {
     throw new Error("handyApiBaseUrl must be a non-empty URL");
   }
+  if (!["percent", "unit"].includes(next.handyNativePositionScale)) {
+    throw new Error("handyNativePositionScale must be 'percent' or 'unit'");
+  }
 
   next.strokeRange = clamp01(next.strokeRange);
   next.globalStrokeMin = clamp01(next.globalStrokeMin);
@@ -236,6 +252,7 @@ function sanitizeMotionConfig(input) {
   next.endpointSafetyPadding = Math.max(0, Math.min(0.2, next.endpointSafetyPadding));
   next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
   next.controllerMode = getControllerMode(next.controllerMode);
+  next.handyNativePositionScale = next.handyNativePositionScale === "unit" ? "unit" : "percent";
 
   if (next.speedMax < next.speedMin) {
     const tmp = next.speedMin;
@@ -261,6 +278,40 @@ function sanitizeMotionConfig(input) {
 }
 
 motionConfig = sanitizeMotionConfig(motionConfig);
+nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
+
+async function loadPersistedMotionConfig() {
+  try {
+    const raw = await fs.readFile(CONFIG_FILE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    motionConfig = sanitizeMotionConfig({
+      ...motionConfig,
+      ...parsed
+    });
+    nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
+    strictMotionTagRuntime = motionConfig.strictMotionTag;
+    // eslint-disable-next-line no-console
+    console.log(`[config] loaded persisted config from ${CONFIG_FILE_PATH}`);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    // eslint-disable-next-line no-console
+    console.warn("[config] failed to load persisted config:", error);
+  }
+}
+
+async function persistMotionConfig() {
+  try {
+    await fs.writeFile(
+      CONFIG_FILE_PATH,
+      `${JSON.stringify(motionConfig, null, 2)}\n`,
+      "utf8"
+    );
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("[config] failed to persist config:", error);
+  }
+}
 
 function applySafeModeToMotion(motion, config) {
   if (!config.safeMode) return motion;
@@ -553,6 +604,7 @@ app.post("/config", (req, res) => {
     const previousMode = motionConfig.controllerMode;
     const previousApiUrl = motionConfig.handyApiBaseUrl;
     const previousConnectionKey = motionConfig.handyConnectionKey;
+    const previousScale = motionConfig.handyNativePositionScale;
     motionConfig = sanitizeMotionConfig(req.body ?? {});
     nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
     strictMotionTagRuntime = motionConfig.strictMotionTag;
@@ -560,9 +612,11 @@ app.post("/config", (req, res) => {
       previousMode !== motionConfig.controllerMode
       || previousApiUrl !== motionConfig.handyApiBaseUrl
       || previousConnectionKey !== motionConfig.handyConnectionKey
+      || previousScale !== motionConfig.handyNativePositionScale
     ) {
       ready = false;
     }
+    void persistMotionConfig();
     return res.json({ ok: true, config: motionConfig });
   } catch (error) {
     return res.status(400).json({
@@ -797,6 +851,7 @@ app.post("/preview-motion", (req, res) => {
       configSnapshot: {
         controllerMode: motionConfig.controllerMode,
         handyApiBaseUrl: motionConfig.handyApiBaseUrl,
+        handyNativePositionScale: motionConfig.handyNativePositionScale,
         handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
         speedMin: motionConfig.speedMin,
         speedMax: motionConfig.speedMax,
@@ -843,6 +898,7 @@ app.post("/preview-motion", (req, res) => {
     configSnapshot: {
       controllerMode: motionConfig.controllerMode,
       handyApiBaseUrl: motionConfig.handyApiBaseUrl,
+      handyNativePositionScale: motionConfig.handyNativePositionScale,
       handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
       speedMin: motionConfig.speedMin,
       speedMax: motionConfig.speedMax,
@@ -860,6 +916,8 @@ app.post("/preview-motion", (req, res) => {
     }
   });
 });
+
+await loadPersistedMotionConfig();
 
 const server = app.listen(port, () => {
   // eslint-disable-next-line no-console
