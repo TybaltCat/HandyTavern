@@ -23,9 +23,12 @@ function depthToNormalizedStroke(depth) {
 }
 
 function getGlobalStrokeWindow(motionConfig) {
-  const min = clamp01(motionConfig.globalStrokeMin ?? 0);
-  const max = clamp01(motionConfig.globalStrokeMax ?? 1);
-  if (max < min) return { min: max, max: min };
+  const pad = Math.max(0, Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03)));
+  const rawMin = clamp01(motionConfig.globalStrokeMin ?? 0);
+  const rawMax = clamp01(motionConfig.globalStrokeMax ?? 1);
+  const min = Math.max(Math.min(rawMin, rawMax), pad);
+  const max = Math.min(Math.max(rawMin, rawMax), 1 - pad);
+  if (max < min) return { min, max: min };
   return { min, max };
 }
 
@@ -200,14 +203,6 @@ export class HandyNativeController {
     const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
     const minStroke = Math.min(mappedStart, mappedEnd);
     const maxStroke = Math.max(mappedStart, mappedEnd);
-    // Keep away from absolute physical endpoints to reduce end-stop impacts.
-    const endpointPad = Math.max(
-      0,
-      Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03))
-    );
-    const safeMinStroke = clamp01(Math.max(minStroke, endpointPad));
-    const safeMaxStroke = clamp01(Math.min(maxStroke, 1 - endpointPad));
-
     const baseHalfCycleMs = Math.max(
       20,
       Math.round(700 * Math.pow(0.05, remappedNormalizedSpeed))
@@ -242,11 +237,11 @@ export class HandyNativeController {
       if (sequence !== this.motionSequence) return;
 
       if (toMax) {
-        await this.sendHdspXpt(safeMaxStroke, halfCycleMs, motionConfig);
-        await this.sendHdspXpt(safeMinStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(maxStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(minStroke, halfCycleMs, motionConfig);
       } else {
-        await this.sendHdspXpt(safeMinStroke, halfCycleMs, motionConfig);
-        await this.sendHdspXpt(safeMaxStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(minStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(maxStroke, halfCycleMs, motionConfig);
       }
       lastDispatchAt = nowMs();
       toMax = !toMax;

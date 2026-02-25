@@ -65,6 +65,28 @@
   flex: 1;
 }
 
+.tavernplug-key-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tavernplug-key-input {
+  flex: 0 1 360px;
+  min-width: 180px;
+}
+
+.tavernplug-sync-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.tavernplug-sync-ok {
+  background: #2f7d32;
+  border-color: #2f7d32;
+  color: #fff;
+}
+
 .tavernplug-global-range {
   position: relative;
   height: 28px;

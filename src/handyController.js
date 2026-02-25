@@ -69,9 +69,12 @@ function computeStrokePosition(depth, motionConfig) {
 }
 
 function getGlobalStrokeWindow(motionConfig) {
-  const min = clamp01(motionConfig.globalStrokeMin ?? 0);
-  const max = clamp01(motionConfig.globalStrokeMax ?? 1);
-  if (max < min) return { min: max, max: min };
+  const pad = Math.max(0, Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03)));
+  const rawMin = clamp01(motionConfig.globalStrokeMin ?? 0);
+  const rawMax = clamp01(motionConfig.globalStrokeMax ?? 1);
+  const min = Math.max(Math.min(rawMin, rawMax), pad);
+  const max = Math.min(Math.max(rawMin, rawMax), 1 - pad);
+  if (max < min) return { min, max: min };
   return { min, max };
 }
 

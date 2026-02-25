@@ -128,6 +128,12 @@ function setHealth(message) {
   if (healthEl) healthEl.textContent = message;
 }
 
+function setSyncButtonConnected(connected) {
+  const button = document.querySelector(`#${EXTENSION_NAME}-sync-test`);
+  if (!button) return;
+  button.classList.toggle("tavernplug-sync-ok", Boolean(connected));
+}
+
 function updateModeStateLine() {
   if (!modeStateEl) return;
   modeStateEl.textContent = [
@@ -319,8 +325,10 @@ async function handleSyncAndTestConnection() {
     const connected = result?.controller?.connected ? "connected" : "disconnected";
     const device = result?.controller?.selectedDevice || "none";
     setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: idle`);
+    setSyncButtonConnected(result?.controller?.connected);
     setStatus(`Connected (${mode})`);
   } catch (error) {
+    setSyncButtonConnected(false);
     setStatus(`Connect test failed: ${error.message}`);
   }
 }
@@ -881,7 +889,6 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Bridge URL</label>
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-sync-test">Sync + Test Connection</button>
     </div>
     <div class="tavernplug-row">
       <label>Controller Backend</label>
@@ -892,7 +899,14 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-row">
       <label>Handy Connection Key</label>
-      <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
+      <div class="tavernplug-key-inline">
+        <input class="tavernplug-key-input" type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
+        <button class="menu_button tavernplug-sync-btn" type="button" id="${EXTENSION_NAME}-sync-test">Sync + Test</button>
+      </div>
+    </div>
+    <div class="tavernplug-row">
+      <label>Endpoint Safety Padding (0-20)</label>
+      <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
     </div>
     <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
@@ -911,12 +925,6 @@ function renderSettingsPanel() {
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
     <div class="tavernplug-row">
-      <label>Physical Stroke Window (0-100)</label>
-      <div class="tavernplug-inline">
-        <input type="number" step="1" min="0" max="100" name="physicalMinPct" value="${settings.physicalMinPct}" />
-        <span>to</span>
-        <input type="number" step="1" min="0" max="100" name="physicalMaxPct" value="${settings.physicalMaxPct}" />
-      </div>
       <label>
         <input type="checkbox" name="invertStroke" ${settings.invertStroke ? "checked" : ""} />
         Invert Stroke Direction
@@ -964,18 +972,6 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Message Check Interval (ms)</label>
       <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Stroke Range (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="strokeRange" value="${settings.strokeRange}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Minimum Allowed Stroke (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Endpoint Safety Padding (0-20)</label>
-      <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
     </div>
     <div class="tavernplug-row">
       <label>Gentle Speed %</label>
@@ -1329,9 +1325,11 @@ function startHealthPolling() {
       const active = health?.motionLikelyActive ? "active" : "idle";
       const mode = health?.controllerMode || settings.controllerMode || "buttplug";
       setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
+      setSyncButtonConnected(Boolean(health?.controller?.connected));
     } catch (error) {
       healthFailureCount += 1;
       setHealth("Bridge: offline");
+      setSyncButtonConnected(false);
       if (healthFailureCount >= 5) {
         if (healthHandle) {
           clearInterval(healthHandle);
