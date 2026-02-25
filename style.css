@@ -198,6 +198,17 @@
   color: #fff;
 }
 
+.tavernplug-quick-pause {
+  background: #9c6f0f;
+  border-color: #9c6f0f;
+  color: #fff;
+}
+
+.tavernplug-quick-pause-on {
+  background: #2f7d32;
+  border-color: #2f7d32;
+}
+
 .tavernplug-quick-stop-inline {
   margin-left: 8px;
 }
@@ -213,6 +224,13 @@
   position: fixed;
   right: 14px;
   bottom: 54px;
+  z-index: 9999;
+}
+
+.tavernplug-quick-pause-floating {
+  position: fixed;
+  right: 14px;
+  bottom: 94px;
   z-index: 9999;
 }
 
