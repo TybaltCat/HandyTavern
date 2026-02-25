@@ -39,8 +39,10 @@ const controller = new HandyController({
 });
 const DEADMAN_TIMEOUT_MS = Math.max(
   5000,
-  Number(process.env.DEADMAN_TIMEOUT_MS ?? 45000)
+  Number(process.env.DEADMAN_TIMEOUT_MS ?? 300000)
 );
+const PARK_ON_START =
+  String(process.env.PARK_ON_START ?? "true").toLowerCase() === "true";
 
 let ready = false;
 const patternState = {
@@ -784,6 +786,21 @@ const server = app.listen(port, () => {
   console.log(
     `[config] ENABLE_DEVICE=${enabled} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} DEVICE_NAME_FILTER=${process.env.DEVICE_NAME_FILTER ?? "handy"}`
   );
+
+  if (enabled && PARK_ON_START) {
+    void (async () => {
+      try {
+        await ensureReady();
+        await controller.parkAtZero(motionConfig);
+        markMotionStopped();
+        // eslint-disable-next-line no-console
+        console.log("[startup] parked at 0");
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error("[startup] park-at-0 failed:", error);
+      }
+    })();
+  }
 });
 
 setInterval(async () => {

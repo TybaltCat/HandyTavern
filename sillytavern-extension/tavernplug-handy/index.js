@@ -81,6 +81,8 @@ let lastSentMessageId = -1;
 let lastSentMessageSignature = "";
 let pollHandle = null;
 let healthHandle = null;
+let healthFailureCount = 0;
+let healthPollingPaused = false;
 let statusEl = null;
 let modeStateEl = null;
 let healthEl = null;
@@ -289,6 +291,9 @@ async function syncConfig() {
 
   try {
     await postJson("/config", payload);
+    healthFailureCount = 0;
+    healthPollingPaused = false;
+    startHealthPolling();
     setStatus("Config synced");
   } catch (error) {
     setStatus(`Config error: ${error.message}. Is bridge running on ${settings.bridgeUrl}?`);
@@ -1252,21 +1257,32 @@ function startPolling() {
 }
 
 function startHealthPolling() {
-  if (healthHandle) return;
+  if (healthHandle || healthPollingPaused) return;
   const run = async () => {
     try {
       const health = await fetchHealth();
+      healthFailureCount = 0;
       const connected = health?.controller?.connected ? "connected" : "disconnected";
       const device = health?.controller?.selectedDevice || "none";
       const active = health?.motionLikelyActive ? "active" : "idle";
       setHealth(`Bridge: ${connected} | Device: ${device} | Motion: ${active}`);
-    } catch (_error) {
+    } catch (error) {
+      healthFailureCount += 1;
       setHealth("Bridge: offline");
+      if (healthFailureCount >= 5) {
+        if (healthHandle) {
+          clearInterval(healthHandle);
+          healthHandle = null;
+        }
+        healthPollingPaused = true;
+        setHealth("Bridge: offline (health polling paused)");
+        setStatus("Health polling paused after repeated failures. Click Sync Config to retry.");
+      }
     }
   };
   healthHandle = setInterval(() => {
     void run();
-  }, 4000);
+  }, 12000);
   void run();
 }
 

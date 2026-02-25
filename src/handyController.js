@@ -2,6 +2,7 @@ import {
   ButtplugClient,
   ButtplugNodeWebsocketClientConnector
 } from "buttplug";
+import { performance } from "node:perf_hooks";
 
 // Tune how much each parsed depth scales intensity.
 const DEPTH_INTENSITY_MULTIPLIER = {
@@ -10,6 +11,8 @@ const DEPTH_INTENSITY_MULTIPLIER = {
   full: 1.0,
   deep: 1.1
 };
+const RHYTHM_DEBUG =
+  String(process.env.RHYTHM_DEBUG ?? "false").toLowerCase() === "true";
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
@@ -23,6 +26,24 @@ function easeHalfCosine(t) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function nowMs() {
+  return performance.now();
+}
+
+function summarizeIntervals(samples) {
+  if (!samples.length) return null;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const sum = samples.reduce((acc, value) => acc + value, 0);
+  const avg = sum / samples.length;
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  const p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))];
+  const variance =
+    samples.reduce((acc, value) => acc + ((value - avg) ** 2), 0) / samples.length;
+  const stdev = Math.sqrt(variance);
+  return { avg, min, max, p95, stdev };
 }
 
 function depthToNormalizedStroke(depth) {
@@ -73,7 +94,18 @@ function applyPhysicalStrokeWindow(value, motionConfig) {
   return clamp01(min + normalized * (max - min));
 }
 
-async function runLinearIfSupported(device, durationMs, position) {
+function cosineStrokePosition(phase, minStroke, maxStroke) {
+  const p = ((phase % 1) + 1) % 1;
+  const span = maxStroke - minStroke;
+  if (p < 0.5) {
+    const u = p * 2;
+    return minStroke + span * easeHalfCosine(u);
+  }
+  const u = (p - 0.5) * 2;
+  return maxStroke - span * easeHalfCosine(u);
+}
+
+async function runLinearIfSupported(device, durationMs, position, payloadState = null) {
   if (typeof device.linear !== "function") return false;
 
   const safeDurationMs = Math.max(1, Math.round(durationMs));
@@ -83,15 +115,38 @@ async function runLinearIfSupported(device, durationMs, position) {
   // This buttplug client expects tuple commands, not object vectors.
   // Keep both ms/sec duration attempts for server-version compatibility.
   const attempts = [
-    async () => device.linear([[safePosition, safeDurationMs]]),
-    async () => device.linear([[safePosition, safeDurationSec]]),
-    async () => device.linear(safePosition, safeDurationMs),
-    async () => device.linear(safePosition, safeDurationSec)
+    {
+      key: "tuple-ms",
+      run: async () => device.linear([[safePosition, safeDurationMs]])
+    },
+    {
+      key: "tuple-sec",
+      run: async () => device.linear([[safePosition, safeDurationSec]])
+    },
+    {
+      key: "args-ms",
+      run: async () => device.linear(safePosition, safeDurationMs)
+    },
+    {
+      key: "args-sec",
+      run: async () => device.linear(safePosition, safeDurationSec)
+    }
   ];
 
-  for (const attempt of attempts) {
+  const preferredKey = payloadState?.preferredKey ?? null;
+  const ordered = preferredKey
+    ? [
+        ...attempts.filter((a) => a.key === preferredKey),
+        ...attempts.filter((a) => a.key !== preferredKey)
+      ]
+    : attempts;
+
+  for (const attempt of ordered) {
     try {
-      await attempt();
+      await attempt.run();
+      if (payloadState) {
+        payloadState.preferredKey = attempt.key;
+      }
       return true;
     } catch (_error) {
       // Try next known payload shape.
@@ -101,7 +156,54 @@ async function runLinearIfSupported(device, durationMs, position) {
   return false;
 }
 
-async function sendLinearStep(device, durationMs, position, rateState = null) {
+async function runLinearSequenceIfSupported(device, sequence, payloadState = null) {
+  if (typeof device.linear !== "function") return false;
+  if (!Array.isArray(sequence) || sequence.length === 0) return false;
+
+  const seqMs = sequence.map(([position, durationMs]) => [
+    clamp01(position),
+    Math.max(1, Math.round(durationMs))
+  ]);
+  const seqSec = seqMs.map(([position, durationMs]) => [
+    position,
+    Math.max(0.001, durationMs / 1000)
+  ]);
+
+  const attempts = [
+    { key: "tuple-ms", run: async () => device.linear(seqMs) },
+    { key: "tuple-sec", run: async () => device.linear(seqSec) }
+  ];
+
+  const preferredKey = payloadState?.preferredKey ?? null;
+  const ordered = preferredKey
+    ? [
+        ...attempts.filter((a) => a.key === preferredKey),
+        ...attempts.filter((a) => a.key !== preferredKey)
+      ]
+    : attempts;
+
+  for (const attempt of ordered) {
+    try {
+      await attempt.run();
+      if (payloadState) {
+        payloadState.preferredKey = attempt.key;
+      }
+      return true;
+    } catch (_error) {
+      // Try next payload shape.
+    }
+  }
+
+  return false;
+}
+
+async function sendLinearStep(
+  device,
+  durationMs,
+  position,
+  rateState = null,
+  payloadState = null
+) {
   const safePosition = clamp01(position);
   if (rateState) {
     const now = Date.now();
@@ -111,7 +213,7 @@ async function sendLinearStep(device, durationMs, position, rateState = null) {
       await sleep(waitMs);
     }
 
-    // Coalesce near-duplicate positions to reduce transport jitter.
+    // Optional coalescing for near-duplicate positions.
     if (
       Number.isFinite(rateState.lastPosition) &&
       Math.abs(safePosition - rateState.lastPosition) <= (rateState.minDelta ?? 0) &&
@@ -121,7 +223,7 @@ async function sendLinearStep(device, durationMs, position, rateState = null) {
     }
   }
 
-  const ok = await runLinearIfSupported(device, durationMs, position);
+  const ok = await runLinearIfSupported(device, durationMs, position, payloadState);
   if (!ok) {
     throw new Error("Linear command failed for all supported payload shapes.");
   }
@@ -129,6 +231,19 @@ async function sendLinearStep(device, durationMs, position, rateState = null) {
   if (rateState) {
     rateState.lastSentAt = Date.now();
     rateState.lastPosition = safePosition;
+  }
+}
+
+async function sendLinearCycle(device, halfMs, minStroke, maxStroke, payloadState = null) {
+  const sequence = [
+    [maxStroke, halfMs],
+    [minStroke, halfMs]
+  ];
+  const ok = await runLinearSequenceIfSupported(device, sequence, payloadState);
+  if (!ok) {
+    // Fallback to single-step commands if sequence payload is unsupported.
+    await sendLinearStep(device, halfMs, maxStroke, null, payloadState);
+    await sendLinearStep(device, halfMs, minStroke, null, payloadState);
   }
 }
 
@@ -147,6 +262,7 @@ export class HandyController {
       scalar: false,
       vibrate: false
     };
+    this.linearPayloadState = { preferredKey: null };
     // Used to cancel older in-flight motions when preemption is enabled.
     this.motionSequence = 0;
   }
@@ -321,9 +437,9 @@ export class HandyController {
     const speedMax = motionConfig.speedMax ?? 1;
     const remapped = remapSpeed(motion.speed, speedMin, speedMax);
     const safeCap = motionConfig.safeMode ? 0.75 : 1;
-    const effectiveMin = clamp01(speedMin);
-    const effectiveMax = Math.max(effectiveMin + 0.001, Math.min(clamp01(speedMax), safeCap));
-    const normalizedSpeed = clamp01((remapped - effectiveMin) / (effectiveMax - effectiveMin));
+    const remappedNormalizedSpeed = clamp01(
+      Math.min(remapped, safeCap) / Math.max(0.001, safeCap)
+    );
     const scalar = clamp01(remapped * depthMultiplier);
     // User-tunable stroke limits are applied inside computeStrokePosition().
     const strokePosition = computeStrokePosition(motion.depth, motionConfig);
@@ -336,9 +452,21 @@ export class HandyController {
     const maxStroke = Math.max(mappedStart, mappedEnd);
     // Stronger speed separation across the configured window.
     // Slower styles become noticeably slower and faster styles much faster.
-    const speedCurve = normalizedSpeed ** 1.15;
-    // 0.0 -> ~430ms half-cycle, 1.0 -> ~70ms half-cycle.
-    const halfCycleMs = Math.max(70, Math.round(430 - speedCurve * 360));
+    // Deterministic tempo:
+    // 1) Base tempo comes from remapped speed window (user/global setting).
+    // 2) Style multiplier then separates gentle/brisk/normal/hard/intense clearly.
+    const baseHalfCycleMs = Math.max(
+      12,
+      Math.round(560 * Math.pow(0.03, remappedNormalizedSpeed))
+    );
+    const styleHalfCycleFactor = {
+      gentle: 1.45,
+      normal: 1.0,
+      brisk: 0.82,
+      hard: 0.66,
+      intense: 0.42
+    }[motion.style] ?? 1.0;
+    const halfCycleMs = Math.max(8, Math.round(baseHalfCycleMs * styleHalfCycleFactor));
 
     if (stopPreviousOnNewMotion) {
       await this.stopNow();
@@ -346,49 +474,59 @@ export class HandyController {
     }
 
     if (typeof device.linear === "function") {
-      const rateState = {
-        lastSentAt: 0,
-        lastPosition: Number.NaN,
-        minIntervalMs: 18,
-        minDelta: 0.0025,
-        maxCoalesceDurationMs: 85
-      };
-      let toMax = true;
-      let currentPos = minStroke;
+      const cycleMs = Math.max(24, halfCycleMs * 2);
+      const cadenceMs = Math.max(
+        35,
+        Math.min(120, Math.round(130 - remappedNormalizedSpeed * 80))
+      );
+      const bufferMsTarget = Math.max(
+        2000,
+        Math.min(5000, Math.round(2200 + (1 - remappedNormalizedSpeed) * 1800))
+      );
+      const topUpMs = Math.max(500, Math.round(bufferMsTarget / 2));
+      let phase = 0;
       const end = Date.now() + motion.durationMs;
       while (holdUntilNextCommand || Date.now() < end) {
         if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
-        const remaining = holdUntilNextCommand ? halfCycleMs : end - Date.now();
-        const stepMs = Math.max(40, Math.min(halfCycleMs, remaining));
-        const target = toMax ? maxStroke : minStroke;
-        const span = Math.abs(target - currentPos);
-        const edgeBand = Math.max(0, span * 0.03); // within ~3% of stroke span
-        const nearTarget = toMax ? target - edgeBand : target + edgeBand;
 
-        // Dwell softens turnarounds, longer when slower.
-        const dwellMsRaw = Math.round(80 - speedCurve * 50); // 30..80ms
-        const dwellMs = stepMs >= 130 ? Math.max(30, Math.min(80, dwellMsRaw)) : 0;
-        const travelMs = Math.max(35, stepMs - dwellMs);
-
-        // Keep command count moderate to avoid transport jitter.
-        const segmentCount = Math.max(3, Math.min(6, Math.round(travelMs / 55)));
-        const segmentMs = Math.max(20, Math.round(travelMs / segmentCount));
-
-        for (let i = 1; i <= segmentCount; i += 1) {
-          if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
-          const t = i / segmentCount;
-          const eased = easeHalfCosine(t);
-          const pos = currentPos + (nearTarget - currentPos) * eased;
-          await sendLinearStep(device, segmentMs, pos, rateState);
+        const remainingMs = holdUntilNextCommand ? bufferMsTarget : end - Date.now();
+        if (remainingMs <= 0) break;
+        const horizonMs = Math.max(0, Math.min(bufferMsTarget, remainingMs));
+        const pointCount = Math.max(1, Math.floor(horizonMs / cadenceMs));
+        const sequencePoints = [];
+        for (let i = 0; i < pointCount; i += 1) {
+          phase += cadenceMs / cycleMs;
+          const pos = cosineStrokePosition(phase, minStroke, maxStroke);
+          sequencePoints.push([pos, cadenceMs]);
         }
 
-        if (dwellMs > 0) {
-          if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
-          await sendLinearStep(device, dwellMs, nearTarget, rateState);
+        const ok = await runLinearSequenceIfSupported(
+          device,
+          sequencePoints,
+          this.linearPayloadState
+        );
+
+        if (!ok) {
+          // Fallback path for servers that don't accept multi-point linear sequences.
+          for (const [pos, dur] of sequencePoints) {
+            if (stopPreviousOnNewMotion && sequence !== this.motionSequence) return;
+            await sendLinearStep(device, dur, pos, null, this.linearPayloadState);
+          }
         }
 
-        currentPos = nearTarget;
-        toMax = !toMax;
+        if (RHYTHM_DEBUG) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[rhythm] mode=buffered style=${motion.style} depth=${motion.depth} cadenceMs=${cadenceMs} points=${sequencePoints.length} horizonMs=${pointCount * cadenceMs} cycleMs=${cycleMs}`
+          );
+        }
+
+        const sleepFor = holdUntilNextCommand
+          ? topUpMs
+          : Math.min(topUpMs, Math.max(0, end - Date.now()));
+        if (sleepFor > 0) {
+          await sleep(sleepFor);
+        }
       }
       await this.stopNow();
       return;
@@ -433,8 +571,9 @@ export class HandyController {
     await this.stopNow();
 
     if (typeof device.linear === "function") {
-      const parkPosition = applyPhysicalStrokeWindow(0, motionConfig);
-      await sendLinearStep(device, 450, parkPosition);
+      // Park should be absolute device position 0, not remapped through
+      // runtime stroke windows, so users always get a deterministic endpoint.
+      await sendLinearStep(device, 450, 0, null, this.linearPayloadState);
       return;
     }
 
