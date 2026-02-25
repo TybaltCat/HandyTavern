@@ -55,6 +55,15 @@
   color: #000;
 }
 
+.tavernplug-row select.tavernplug-native-select {
+  color: #fff;
+}
+
+.tavernplug-row select.tavernplug-native-select option {
+  color: #fff;
+  background: #1f1f1f;
+}
+
 .tavernplug-inline {
   display: flex;
   align-items: center;

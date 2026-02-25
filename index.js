@@ -3,6 +3,7 @@ const EXTENSION_NAME = "tavernplug-handy";
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   controllerMode: "handy-native",
+  handyNativeProtocol: "hrpp",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   handyNativePositionScale: "percent",
   handyNativeCommand: "xpt",
@@ -28,7 +29,7 @@ const DEFAULTS = {
   testSpeedGentlePct: 20,
   testSpeedBriskPct: 55,
   testSpeedNormalPct: 40,
-  testSpeedHardPct: 75,
+  testSpeedHardPct: 65,
   testSpeedIntensePct: 90,
   handyConnectionKey: "",
   globalStrokeMinPct: 0,
@@ -64,10 +65,19 @@ function saveSettings() {
 const extensionSettingsStore = getExtensionSettingsStore() ?? {};
 const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
+if (!["hamp", "hdsp", "hrpp"].includes(String(settings.handyNativeProtocol ?? "").toLowerCase())) {
+  settings.handyNativeProtocol = "hrpp";
+}
+if (String(settings.handyNativeProtocol).toLowerCase() === "hamp") {
+  settings.handyNativeProtocol = "hrpp";
+}
 // Migrate older default profile where brisk was slower than normal.
 if (Number(settings.testSpeedBriskPct) === 40 && Number(settings.testSpeedNormalPct) === 55) {
   settings.testSpeedBriskPct = 55;
   settings.testSpeedNormalPct = 40;
+}
+if (Number(settings.testSpeedHardPct) >= Number(settings.testSpeedIntensePct)) {
+  settings.testSpeedIntensePct = Math.min(100, Number(settings.testSpeedHardPct) + 15);
 }
 normalizePercentSetting("strokeRange");
 normalizePercentSetting("speedMin");
@@ -305,6 +315,7 @@ async function syncConfig() {
   // Keep this payload aligned with POST /config in src/index.js.
   const payload = {
     controllerMode: String(settings.controllerMode ?? "buttplug"),
+    handyNativeProtocol: String(settings.handyNativeProtocol ?? "hamp"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
     handyNativePositionScale: String(settings.handyNativePositionScale ?? "percent"),
     handyNativeCommand: String(settings.handyNativeCommand ?? "xpt"),
@@ -982,8 +993,9 @@ function renderSettingsPanel() {
       <label>Pattern Interval (ms)</label>
       <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
     </div>
-    <div class="tavernplug-row">
+    <div class="tavernplug-actions">
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
+      <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
     </div>
     <div class="tavernplug-advanced-body" style="display:none;">
     <div class="tavernplug-row">
@@ -992,14 +1004,14 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-row">
       <label>Native Position Scale</label>
-      <select name="handyNativePositionScale">
+      <select name="handyNativePositionScale" class="tavernplug-native-select">
         <option value="percent" ${settings.handyNativePositionScale === "percent" ? "selected" : ""}>0..100 (xpt percent)</option>
         <option value="unit" ${settings.handyNativePositionScale === "unit" ? "selected" : ""}>0..1 (normalized)</option>
       </select>
     </div>
     <div class="tavernplug-row">
       <label>Native Motion Command</label>
-      <select name="handyNativeCommand">
+      <select name="handyNativeCommand" class="tavernplug-native-select">
         <option value="xpt" ${settings.handyNativeCommand === "xpt" ? "selected" : ""}>/hdsp/xpt (percent/normalized target + time)</option>
         <option value="xat" ${settings.handyNativeCommand === "xat" ? "selected" : ""}>/hdsp/xat (absolute target + time)</option>
       </select>
@@ -1046,9 +1058,6 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Message Check Interval (ms)</label>
       <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
-    </div>
-    <div class="tavernplug-row">
-      <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
     </div>
     <div class="tavernplug-speed-profiles-body" style="display:none;">
       <div class="tavernplug-row">

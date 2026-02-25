@@ -80,10 +80,22 @@ let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
   handyApiBaseUrl:
     process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
+  handyNativeProtocol:
+    ["hamp", "hdsp", "hrpp"].includes(
+      String(process.env.HANDY_NATIVE_PROTOCOL ?? "hrpp").toLowerCase()
+    )
+      ? String(process.env.HANDY_NATIVE_PROTOCOL ?? "hrpp").toLowerCase()
+      : "hrpp",
   handyNativePositionScale:
     String(process.env.HANDY_NATIVE_POSITION_SCALE ?? "percent").toLowerCase() === "unit"
       ? "unit"
       : "percent",
+  handyNativeCommand:
+    String(process.env.HANDY_NATIVE_COMMAND ?? "xpt").toLowerCase() === "xat"
+      ? "xat"
+      : "xpt",
+  handyNativeTrace:
+    String(process.env.HANDY_NATIVE_TRACE ?? "false").toLowerCase() === "true",
   handyNativeMin: Number(process.env.HANDY_NATIVE_MIN ?? 0.25),
   handyNativeMax: Number(process.env.HANDY_NATIVE_MAX ?? 0.75),
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
@@ -144,10 +156,22 @@ function sanitizeMotionConfig(input) {
       input.handyApiBaseUrl === undefined
         ? motionConfig.handyApiBaseUrl
         : String(input.handyApiBaseUrl ?? "").trim(),
+    handyNativeProtocol:
+      input.handyNativeProtocol === undefined
+        ? motionConfig.handyNativeProtocol
+        : String(input.handyNativeProtocol ?? "").trim().toLowerCase(),
     handyNativePositionScale:
       input.handyNativePositionScale === undefined
         ? motionConfig.handyNativePositionScale
         : String(input.handyNativePositionScale ?? "").trim().toLowerCase(),
+    handyNativeCommand:
+      input.handyNativeCommand === undefined
+        ? motionConfig.handyNativeCommand
+        : String(input.handyNativeCommand ?? "").trim().toLowerCase(),
+    handyNativeTrace:
+      input.handyNativeTrace === undefined
+        ? motionConfig.handyNativeTrace
+        : parseBoolean(input.handyNativeTrace, motionConfig.handyNativeTrace),
     handyNativeMin:
       input.handyNativeMin === undefined
         ? motionConfig.handyNativeMin
@@ -247,8 +271,14 @@ function sanitizeMotionConfig(input) {
   if (!next.handyApiBaseUrl) {
     throw new Error("handyApiBaseUrl must be a non-empty URL");
   }
+  if (!["hamp", "hdsp", "hrpp"].includes(next.handyNativeProtocol)) {
+    throw new Error("handyNativeProtocol must be 'hamp', 'hdsp' or 'hrpp'");
+  }
   if (!["percent", "unit"].includes(next.handyNativePositionScale)) {
     throw new Error("handyNativePositionScale must be 'percent' or 'unit'");
+  }
+  if (!["xpt", "xat"].includes(next.handyNativeCommand)) {
+    throw new Error("handyNativeCommand must be 'xpt' or 'xat'");
   }
   if (!Number.isFinite(next.handyNativeMin)) {
     throw new Error("handyNativeMin must be a number between 0 and 1");
@@ -268,7 +298,11 @@ function sanitizeMotionConfig(input) {
   next.endpointSafetyPadding = Math.max(0, Math.min(0.2, next.endpointSafetyPadding));
   next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
   next.controllerMode = getControllerMode(next.controllerMode);
+  next.handyNativeProtocol = ["hamp", "hdsp", "hrpp"].includes(next.handyNativeProtocol)
+    ? next.handyNativeProtocol
+    : "hrpp";
   next.handyNativePositionScale = next.handyNativePositionScale === "unit" ? "unit" : "percent";
+  next.handyNativeCommand = next.handyNativeCommand === "xat" ? "xat" : "xpt";
   next.handyNativeMin = clamp01(next.handyNativeMin);
   next.handyNativeMax = clamp01(next.handyNativeMax);
   if (next.handyNativeMax < next.handyNativeMin) {
@@ -627,7 +661,9 @@ app.post("/config", (req, res) => {
     const previousMode = motionConfig.controllerMode;
     const previousApiUrl = motionConfig.handyApiBaseUrl;
     const previousConnectionKey = motionConfig.handyConnectionKey;
+    const previousProtocol = motionConfig.handyNativeProtocol;
     const previousScale = motionConfig.handyNativePositionScale;
+    const previousCommand = motionConfig.handyNativeCommand;
     const previousNativeMin = motionConfig.handyNativeMin;
     const previousNativeMax = motionConfig.handyNativeMax;
     motionConfig = sanitizeMotionConfig(req.body ?? {});
@@ -637,7 +673,9 @@ app.post("/config", (req, res) => {
       previousMode !== motionConfig.controllerMode
       || previousApiUrl !== motionConfig.handyApiBaseUrl
       || previousConnectionKey !== motionConfig.handyConnectionKey
+      || previousProtocol !== motionConfig.handyNativeProtocol
       || previousScale !== motionConfig.handyNativePositionScale
+      || previousCommand !== motionConfig.handyNativeCommand
       || previousNativeMin !== motionConfig.handyNativeMin
       || previousNativeMax !== motionConfig.handyNativeMax
     ) {
@@ -720,7 +758,9 @@ app.post("/motion", async (req, res) => {
 
   let patternTrigger = null;
   try {
-    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
+    if (!(motionConfig.controllerMode === "handy-native" && motionConfig.handyNativeProtocol === "hamp")) {
+      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -847,7 +887,9 @@ app.post("/preview-motion", (req, res) => {
 
   let patternTrigger = null;
   try {
-    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
+    if (!(motionConfig.controllerMode === "handy-native" && motionConfig.handyNativeProtocol === "hamp")) {
+      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -877,8 +919,11 @@ app.post("/preview-motion", (req, res) => {
       pattern: patternTrigger,
       configSnapshot: {
         controllerMode: motionConfig.controllerMode,
+        handyNativeProtocol: motionConfig.handyNativeProtocol,
         handyApiBaseUrl: motionConfig.handyApiBaseUrl,
         handyNativePositionScale: motionConfig.handyNativePositionScale,
+        handyNativeCommand: motionConfig.handyNativeCommand,
+        handyNativeTrace: motionConfig.handyNativeTrace,
         handyNativeMin: motionConfig.handyNativeMin,
         handyNativeMax: motionConfig.handyNativeMax,
         handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
@@ -926,8 +971,11 @@ app.post("/preview-motion", (req, res) => {
     motion: runMotion,
     configSnapshot: {
       controllerMode: motionConfig.controllerMode,
+      handyNativeProtocol: motionConfig.handyNativeProtocol,
       handyApiBaseUrl: motionConfig.handyApiBaseUrl,
       handyNativePositionScale: motionConfig.handyNativePositionScale,
+      handyNativeCommand: motionConfig.handyNativeCommand,
+      handyNativeTrace: motionConfig.handyNativeTrace,
       handyNativeMin: motionConfig.handyNativeMin,
       handyNativeMax: motionConfig.handyNativeMax,
       handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
@@ -955,7 +1003,7 @@ const server = app.listen(port, () => {
   console.log(`TavernPlug listening on http://127.0.0.1:${port}`);
   // eslint-disable-next-line no-console
   console.log(
-    `[config] ENABLE_DEVICE=${enabled} CONTROLLER_MODE=${motionConfig.controllerMode} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} HANDY_API_BASE_URL=${motionConfig.handyApiBaseUrl}`
+    `[config] ENABLE_DEVICE=${enabled} CONTROLLER_MODE=${motionConfig.controllerMode} HANDY_NATIVE_PROTOCOL=${motionConfig.handyNativeProtocol} BUTTPLUG_WS_URL=${process.env.BUTTPLUG_WS_URL ?? "ws://127.0.0.1:12345"} HANDY_API_BASE_URL=${motionConfig.handyApiBaseUrl}`
   );
 
   if (enabled && PARK_ON_START) {

@@ -58,8 +58,44 @@ function computeStrokePosition(depth, motionConfig) {
   return applyGlobalStrokeWindow(local, motionConfig);
 }
 
+function computeMappedStrokeWindow(depth, motionConfig) {
+  const strokePosition = computeStrokePosition(depth, motionConfig);
+  const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+  const logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
+  const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
+  const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
+  const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
+  return {
+    minStroke: Math.min(mappedStart, mappedEnd),
+    maxStroke: Math.max(mappedStart, mappedEnd)
+  };
+}
+
 function nowMs() {
   return performance.now();
+}
+
+function redactSecrets(value) {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value && typeof value === "object") {
+    const output = {};
+    for (const [key, nested] of Object.entries(value)) {
+      if (key === "connectionKey" || key === "key" || key.toLowerCase().includes("token")) {
+        output[key] = "[redacted]";
+      } else {
+        output[key] = redactSecrets(nested);
+      }
+    }
+    return output;
+  }
+  return value;
+}
+
+function getNativeProtocol(motionConfig = {}) {
+  const value = String(motionConfig.handyNativeProtocol ?? "hrpp").toLowerCase();
+  if (value === "hdsp") return "hdsp";
+  if (value === "hamp") return "hamp";
+  return "hrpp";
 }
 
 export class HandyNativeController {
@@ -72,6 +108,7 @@ export class HandyNativeController {
     this.lastStatus = null;
     this.motionSequence = 0;
     this.modeSet = false;
+    this.hampSlideUnsupported = false;
   }
 
   setApiBaseUrl(url) {
@@ -96,16 +133,23 @@ export class HandyNativeController {
     };
   }
 
-  async request(path, key, method = "GET", body = undefined) {
+  async request(path, key, method = "GET", body = undefined, options = {}) {
     if (!key) {
       throw new Error("Handy connection key is required for native mode.");
     }
+    const trace = Boolean(options.trace);
     const keyParam = encodeURIComponent(key);
     // API variants use either connectionKey or key as query parameter.
     const sep = path.includes("?") ? "&" : "?";
     const url = `${this.apiBaseUrl}${path}${sep}connectionKey=${keyParam}&key=${keyParam}`;
     const mergedBody =
       body === undefined ? undefined : { connectionKey: key, key, ...body };
+    if (trace) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[native:req] ${method} ${path} body=${JSON.stringify(redactSecrets(mergedBody ?? {}))}`
+      );
+    }
     const response = await fetch(url, {
       method,
       headers: {
@@ -116,11 +160,27 @@ export class HandyNativeController {
       body: mergedBody === undefined ? undefined : JSON.stringify(mergedBody)
     });
     const data = await response.json().catch(() => ({}));
+    if (trace) {
+      // eslint-disable-next-line no-console
+      console.log(`[native:res] ${method} ${path} status=${response.status} body=${JSON.stringify(data)}`);
+    }
     if (!response.ok) {
       const errorText = data?.error || data?.message || `Native API request failed (${response.status})`;
       throw new Error(errorText);
     }
     return data;
+  }
+
+  async requestWithVariants(path, key, method, payloads, options = {}) {
+    let lastError = null;
+    for (const payload of payloads) {
+      try {
+        return await this.request(path, key, method, payload, options);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError ?? new Error(`No payload variant succeeded for ${method} ${path}`);
   }
 
   async connect(motionConfig = {}) {
@@ -130,20 +190,34 @@ export class HandyNativeController {
       throw new Error("handyConnectionKey is required when controllerMode=handy-native.");
     }
 
-    const connected = await this.request("/connected", key, "GET");
+    const trace = Boolean(motionConfig.handyNativeTrace);
+    const connected = await this.request("/connected", key, "GET", undefined, { trace });
     this.lastStatus = connected;
     this.connected = true;
     this.lastConnectAt = Date.now();
     this.lastError = null;
+    this.hampSlideUnsupported = false;
 
-    // Put device in HDSP mode for timed target position moves.
-    // API variants differ, so try string then numeric mode value.
-    try {
-      await this.request("/mode", key, "PUT", { mode: "hdsp" });
-      this.modeSet = true;
-    } catch (_error) {
-      await this.request("/mode", key, "PUT", { mode: 2 });
-      this.modeSet = true;
+    // Put device in configured motion mode. API variants differ by firmware.
+    this.modeSet = false;
+    const protocol = getNativeProtocol(motionConfig);
+    const variants = protocol === "hdsp"
+      ? [{ mode: "hdsp" }, { mode: "HDSP" }, { mode: 2 }]
+      : protocol === "hamp"
+        ? [{ mode: "hamp" }, { mode: "HAMP" }, { mode: 1 }]
+        : [{ mode: "hrpp" }, { mode: "HRPP" }, { mode: "hssp" }, { mode: "HSSP" }, { mode: 3 }, { mode: 4 }];
+    for (const payload of variants) {
+      try {
+        await this.request("/mode", key, "PUT", payload, { trace });
+        this.modeSet = true;
+        break;
+      } catch (_error) {
+        // try next variant
+      }
+    }
+    if (!this.modeSet && protocol === "hdsp") {
+      // eslint-disable-next-line no-console
+      console.warn("[native] failed to set explicit HDSP mode; continuing");
     }
   }
 
@@ -174,6 +248,7 @@ export class HandyNativeController {
 
   async sendHdspXpt(position01, durationMs, motionConfig = {}) {
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
     const endpointPad = Math.max(
       0,
       Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03))
@@ -187,21 +262,79 @@ export class HandyNativeController {
     const winMax = Math.max(nativeMin, nativeMax);
     const mappedPosition = clamp01(winMin + safePosition * (winMax - winMin));
     const scale = String(motionConfig.handyNativePositionScale ?? "percent").toLowerCase();
-    const xpt = scale === "unit"
+    const command = String(motionConfig.handyNativeCommand ?? "xpt").toLowerCase() === "xat"
+      ? "xat"
+      : "xpt";
+    const value = scale === "unit"
       ? Math.round(mappedPosition * 10000) / 10000 // 0..1
       : Math.round(mappedPosition * 10000) / 100; // 0..100
     const t = Math.max(1, Math.round(durationMs));
     // eslint-disable-next-line no-console
     console.log(
-      `[native] xpt=${xpt} scale=${scale} t=${t} pad=${Math.round(endpointPad * 100)}% nativeWin=${winMin.toFixed(2)}..${winMax.toFixed(2)}`
+      `[native] cmd=${command} value=${value} scale=${scale} t=${t} pad=${Math.round(endpointPad * 100)}% nativeWin=${winMin.toFixed(2)}..${winMax.toFixed(2)}`
     );
-    // Common payload for HDSP percent+time endpoint.
-    await this.request("/hdsp/xpt", key, "PUT", { xpt, t, stopOnTarget: false });
+    const path = command === "xat" ? "/hdsp/xat" : "/hdsp/xpt";
+    const payload = command === "xat"
+      ? { xat: value, t, stopOnTarget: false }
+      : { xpt: value, t, stopOnTarget: false };
+    await this.request(path, key, "PUT", payload, { trace });
+  }
+
+  async setModeForProtocol(protocol, motionConfig = {}) {
+    const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
+    const variants = protocol === "hdsp"
+      ? [{ mode: "hdsp" }, { mode: "HDSP" }, { mode: 2 }]
+      : protocol === "hamp"
+        ? [{ mode: "hamp" }, { mode: "HAMP" }, { mode: 1 }]
+        : [{ mode: "hrpp" }, { mode: "HRPP" }, { mode: "hssp" }, { mode: "HSSP" }, { mode: 3 }, { mode: 4 }];
+    await this.requestWithVariants("/mode", key, "PUT", variants, { trace });
+  }
+
+  async sendHdspParkZeroRaw(motionConfig = {}) {
+    const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
+    const t = 450;
+    // Bypass all app-side stroke windows/safety for explicit park command.
+    // Try both HDSP endpoints and accepted value scales.
+    await this.requestWithVariants(
+      "/hdsp/xpt",
+      key,
+      "PUT",
+      [
+        { xpt: 0, t, stopOnTarget: true },
+        { xpt: 0.0, t, stopOnTarget: true }
+      ],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hdsp/xat",
+      key,
+      "PUT",
+      [
+        { xat: 0, t, stopOnTarget: true },
+        { xat: 0.0, t, stopOnTarget: true }
+      ],
+      { trace }
+    ));
   }
 
   async runMotion(motion, motionConfig = {}, options = {}) {
     await this.connectWithRetry(motionConfig);
 
+    const protocol = getNativeProtocol(motionConfig);
+    if (protocol === "hamp") {
+      await this.runHampMotion(motion, motionConfig, options);
+      return;
+    }
+    if (protocol === "hrpp") {
+      await this.runHrppMotion(motion, motionConfig, options);
+      return;
+    }
+
+    await this.runHdspMotion(motion, motionConfig, options);
+  }
+
+  async runHdspMotion(motion, motionConfig = {}, options = {}) {
     const holdUntilNextCommand = options.holdUntilNextCommand ?? false;
     const sequence = ++this.motionSequence;
     await this.ensureDevice(10000, motionConfig);
@@ -214,14 +347,7 @@ export class HandyNativeController {
       Math.min(remapped, safeCap) / Math.max(0.001, safeCap)
     );
 
-    const strokePosition = computeStrokePosition(motion.depth, motionConfig);
-    const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
-    const logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
-    const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
-    const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
-    const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
-    const minStroke = Math.min(mappedStart, mappedEnd);
-    const maxStroke = Math.max(mappedStart, mappedEnd);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
     const baseHalfCycleMs = Math.max(
       20,
       Math.round(700 * Math.pow(0.05, remappedNormalizedSpeed))
@@ -267,10 +393,226 @@ export class HandyNativeController {
     }
   }
 
+  async applyHampSlideWindow(motion, motionConfig = {}) {
+    if (this.hampSlideUnsupported) return;
+    const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const minPct = Math.round(minStroke * 1000) / 10;
+    const maxPct = Math.round(maxStroke * 1000) / 10;
+    // eslint-disable-next-line no-console
+    console.log(`[native] cmd=hamp slide=${minPct}%..${maxPct}% depth=${motion.depth}`);
+    await this.requestWithVariants(
+      "/slide",
+      key,
+      "PUT",
+      [
+        { min: minPct, max: maxPct },
+        { min: minPct, max: maxPct, enabled: true },
+        { from: minPct, to: maxPct }
+      ],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hamp/slide",
+      key,
+      "PUT",
+      [
+        { min: minPct, max: maxPct },
+        { from: minPct, to: maxPct }
+      ],
+      { trace }
+    )).catch((error) => {
+      this.hampSlideUnsupported = true;
+      throw error;
+    });
+  }
+
+  async runHampMotion(motion, motionConfig = {}, options = {}) {
+    const holdUntilNextCommand = options.holdUntilNextCommand ?? false;
+    const sequence = ++this.motionSequence;
+    await this.ensureDevice(10000, motionConfig);
+
+    const speedMin = motionConfig.speedMin ?? 0;
+    const speedMax = motionConfig.speedMax ?? 1;
+    const remapped = remapSpeed(motion.speed, speedMin, speedMax);
+    const safeCap = motionConfig.safeMode ? 0.75 : 1;
+    const styleSpeedFactor = {
+      gentle: 0.75,
+      normal: 0.95,
+      brisk: 1.1,
+      hard: 1.25,
+      intense: 1.5
+    }[motion.style] ?? 1.0;
+    const capped = clamp01(Math.min(remapped * styleSpeedFactor, safeCap));
+    const speedPct = Math.max(1, Math.min(100, Math.round(capped * 100)));
+    const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
+
+    try {
+      await this.applyHampSlideWindow(motion, motionConfig);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn("[native] hamp slide window update failed; continuing with speed-only:", error?.message ?? error);
+    }
+
+    await this.requestWithVariants(
+      "/hamp/start",
+      key,
+      "PUT",
+      [{}, { state: true }, { start: true }],
+      { trace }
+    );
+    // eslint-disable-next-line no-console
+    console.log(`[native] cmd=hamp speed=${speedPct}%`);
+    // Prefer generic speed setter first (official SDK setSpeed maps to this behavior),
+    // then fall back to HAMP velocity endpoint variants.
+    await this.requestWithVariants(
+      "/speed",
+      key,
+      "PUT",
+      [{ speed: speedPct }, { value: speedPct }],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hamp/velocity",
+      key,
+      "PUT",
+      [{ velocity: speedPct }, { speed: speedPct }, { value: speedPct }],
+      { trace }
+    ));
+
+    if (holdUntilNextCommand) return;
+
+    const endAt = Date.now() + Math.max(100, Math.round(motion.durationMs));
+    while (Date.now() < endAt) {
+      if (sequence !== this.motionSequence) return;
+      await sleep(Math.min(250, endAt - Date.now()));
+    }
+    if (sequence !== this.motionSequence) return;
+    await this.requestWithVariants(
+      "/hamp/stop",
+      key,
+      "PUT",
+      [{}, { state: false }, { stop: true }],
+      { trace }
+    );
+  }
+
+  async runHrppMotion(motion, motionConfig = {}, options = {}) {
+    const holdUntilNextCommand = options.holdUntilNextCommand ?? false;
+    const sequence = ++this.motionSequence;
+    await this.ensureDevice(10000, motionConfig);
+
+    const speedMin = motionConfig.speedMin ?? 0;
+    const speedMax = motionConfig.speedMax ?? 1;
+    const remapped = remapSpeed(motion.speed, speedMin, speedMax);
+    const safeCap = motionConfig.safeMode ? 0.75 : 1;
+    const styleSpeedFactor = {
+      gentle: 0.75,
+      normal: 0.95,
+      brisk: 1.1,
+      hard: 1.25,
+      intense: 1.5
+    }[motion.style] ?? 1.0;
+    const capped = clamp01(Math.min(remapped * styleSpeedFactor, safeCap));
+    const speedPct = Math.max(1, Math.min(100, Math.round(capped * 100)));
+    const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
+
+    try {
+      await this.applyHampSlideWindow(motion, motionConfig);
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.warn("[native] hrpp slide window update failed; continuing:", error?.message ?? error);
+    }
+
+    // Use generic speed endpoint first; fallback to HAMP velocity setter that is
+    // still accepted by current firmware while in HRPP/HSSP mode.
+    // eslint-disable-next-line no-console
+    console.log(`[native] cmd=hrpp speed=${speedPct}%`);
+    await this.requestWithVariants(
+      "/speed",
+      key,
+      "PUT",
+      [{ speed: speedPct }, { value: speedPct }],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hamp/velocity",
+      key,
+      "PUT",
+      [{ velocity: speedPct }, { speed: speedPct }, { value: speedPct }],
+      { trace }
+    ));
+
+    // Start repeating pattern playback in HRPP/HSSP mode.
+    await this.requestWithVariants(
+      "/hssp/loop",
+      key,
+      "PUT",
+      [{ loop: true }, { enabled: true }],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hrpp/loop",
+      key,
+      "PUT",
+      [{ loop: true }, { enabled: true }],
+      { trace }
+    ));
+    await this.requestWithVariants(
+      "/hssp/play",
+      key,
+      "PUT",
+      [{}, { startTime: 0 }, { time: 0 }],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hrpp/play",
+      key,
+      "PUT",
+      [{}, { startTime: 0 }, { time: 0 }],
+      { trace }
+    ));
+
+    if (holdUntilNextCommand) return;
+
+    const endAt = Date.now() + Math.max(100, Math.round(motion.durationMs));
+    while (Date.now() < endAt) {
+      if (sequence !== this.motionSequence) return;
+      await sleep(Math.min(250, endAt - Date.now()));
+    }
+    if (sequence !== this.motionSequence) return;
+    await this.requestWithVariants(
+      "/hssp/stop",
+      key,
+      "PUT",
+      [{}, { stop: true }],
+      { trace }
+    ).catch(async () => this.requestWithVariants(
+      "/hrpp/stop",
+      key,
+      "PUT",
+      [{}, { stop: true }],
+      { trace }
+    ));
+  }
+
   async parkAtZero(motionConfig = {}) {
     this.motionSequence += 1;
     await this.connectWithRetry(motionConfig);
-    await this.sendHdspXpt(0, 450, motionConfig);
+    const protocol = getNativeProtocol(motionConfig);
+    if (protocol === "hamp" || protocol === "hrpp") {
+      await this.stopNow({ cancelPending: false }, motionConfig);
+      try {
+        await this.setModeForProtocol("hdsp", motionConfig);
+        await this.sendHdspParkZeroRaw(motionConfig);
+      } finally {
+        try {
+          await this.setModeForProtocol(protocol, motionConfig);
+        } catch (_error) {
+          // Best effort restore.
+        }
+      }
+      return;
+    }
+    await this.sendHdspParkZeroRaw(motionConfig);
   }
 
   async stopNow(options = {}, motionConfig = {}) {
@@ -278,13 +620,60 @@ export class HandyNativeController {
       this.motionSequence += 1;
     }
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
+    const trace = Boolean(motionConfig.handyNativeTrace);
     if (!key) return;
+    const protocol = getNativeProtocol(motionConfig);
+    if (protocol === "hrpp") {
+      try {
+        await this.requestWithVariants(
+          "/hssp/stop",
+          key,
+          "PUT",
+          [{}, { stop: true }],
+          { trace }
+        );
+        return;
+      } catch (_error) {
+        try {
+          await this.requestWithVariants(
+            "/hrpp/stop",
+            key,
+            "PUT",
+            [{}, { stop: true }],
+            { trace }
+          );
+          return;
+        } catch (_error2) {
+          // Fallback below.
+        }
+      }
+    }
+    if (protocol === "hamp") {
+      try {
+        await this.requestWithVariants(
+          "/hamp/stop",
+          key,
+          "PUT",
+          [{}, { state: false }, { stop: true }],
+          { trace }
+        );
+        return;
+      } catch (_error) {
+        // Fallback below.
+      }
+    }
     try {
-      await this.request("/hdsp/stop", key, "PUT", {});
+      await this.request("/hdsp/stop", key, "PUT", {}, { trace });
     } catch (_error) {
       // Best effort fallback.
       try {
-        await this.request("/hamp/stop", key, "PUT", {});
+        await this.requestWithVariants(
+          "/hamp/stop",
+          key,
+          "PUT",
+          [{}, { state: false }, { stop: true }],
+          { trace }
+        );
       } catch (_error2) {
         // Ignore fallback errors.
       }
