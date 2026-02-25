@@ -42,6 +42,7 @@ const buttplugController = new HandyController({
 });
 const nativeController = new HandyNativeController({
   apiBaseUrl: process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
+  apiBaseUrlV3: process.env.HANDY_V3_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy-rest/v3",
   clientName: process.env.CLIENT_NAME ?? "TavernPlug"
 });
 const controllers = {
@@ -52,6 +53,8 @@ const DEADMAN_TIMEOUT_MS = Math.max(
   5000,
   Number(process.env.DEADMAN_TIMEOUT_MS ?? 300000)
 );
+const FORCE_HAMP_PROTOCOL =
+  String(process.env.FORCE_HAMP_PROTOCOL ?? "true").toLowerCase() === "true";
 const PARK_ON_START =
   String(process.env.PARK_ON_START ?? "true").toLowerCase() === "true";
 const CONFIG_FILE_PATH =
@@ -71,6 +74,7 @@ let motionRunToken = 0;
 let lastMotionCommandAt = 0;
 let motionLikelyActive = false;
 let deadmanEngaged = false;
+let startupParkPromise = null;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   controllerMode:
@@ -80,12 +84,19 @@ let motionConfig = {
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
   handyApiBaseUrl:
     process.env.HANDY_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy/v2",
+  handyV3ApiBaseUrl:
+    process.env.HANDY_V3_API_BASE_URL ?? "https://www.handyfeeling.com/api/handy-rest/v3",
+  handyV3ApiKey: process.env.HANDY_V3_API_KEY ?? "",
   handyNativeProtocol:
     ["hamp", "hdsp", "hrpp"].includes(
-      String(process.env.HANDY_NATIVE_PROTOCOL ?? "hrpp").toLowerCase()
+      String(process.env.HANDY_NATIVE_PROTOCOL ?? "hamp").toLowerCase()
     )
-      ? String(process.env.HANDY_NATIVE_PROTOCOL ?? "hrpp").toLowerCase()
-      : "hrpp",
+      ? String(process.env.HANDY_NATIVE_PROTOCOL ?? "hamp").toLowerCase()
+      : "hamp",
+  handyNativeBackend:
+    String(process.env.HANDY_NATIVE_BACKEND ?? "thehandy").toLowerCase() === "builtin"
+      ? "builtin"
+      : "thehandy",
   handyNativePositionScale:
     String(process.env.HANDY_NATIVE_POSITION_SCALE ?? "percent").toLowerCase() === "unit"
       ? "unit"
@@ -156,10 +167,22 @@ function sanitizeMotionConfig(input) {
       input.handyApiBaseUrl === undefined
         ? motionConfig.handyApiBaseUrl
         : String(input.handyApiBaseUrl ?? "").trim(),
+    handyV3ApiBaseUrl:
+      input.handyV3ApiBaseUrl === undefined
+        ? motionConfig.handyV3ApiBaseUrl
+        : String(input.handyV3ApiBaseUrl ?? "").trim(),
+    handyV3ApiKey:
+      input.handyV3ApiKey === undefined
+        ? motionConfig.handyV3ApiKey
+        : String(input.handyV3ApiKey ?? "").trim(),
     handyNativeProtocol:
       input.handyNativeProtocol === undefined
         ? motionConfig.handyNativeProtocol
         : String(input.handyNativeProtocol ?? "").trim().toLowerCase(),
+    handyNativeBackend:
+      input.handyNativeBackend === undefined
+        ? motionConfig.handyNativeBackend
+        : String(input.handyNativeBackend ?? "").trim().toLowerCase(),
     handyNativePositionScale:
       input.handyNativePositionScale === undefined
         ? motionConfig.handyNativePositionScale
@@ -271,8 +294,14 @@ function sanitizeMotionConfig(input) {
   if (!next.handyApiBaseUrl) {
     throw new Error("handyApiBaseUrl must be a non-empty URL");
   }
+  if (!next.handyV3ApiBaseUrl) {
+    throw new Error("handyV3ApiBaseUrl must be a non-empty URL");
+  }
   if (!["hamp", "hdsp", "hrpp"].includes(next.handyNativeProtocol)) {
     throw new Error("handyNativeProtocol must be 'hamp', 'hdsp' or 'hrpp'");
+  }
+  if (!["builtin", "thehandy"].includes(next.handyNativeBackend)) {
+    throw new Error("handyNativeBackend must be 'builtin' or 'thehandy'");
   }
   if (!["percent", "unit"].includes(next.handyNativePositionScale)) {
     throw new Error("handyNativePositionScale must be 'percent' or 'unit'");
@@ -300,7 +329,11 @@ function sanitizeMotionConfig(input) {
   next.controllerMode = getControllerMode(next.controllerMode);
   next.handyNativeProtocol = ["hamp", "hdsp", "hrpp"].includes(next.handyNativeProtocol)
     ? next.handyNativeProtocol
-    : "hrpp";
+    : "hamp";
+  if (FORCE_HAMP_PROTOCOL && next.handyNativeProtocol === "hrpp") {
+    next.handyNativeProtocol = "hamp";
+  }
+  next.handyNativeBackend = next.handyNativeBackend === "builtin" ? "builtin" : "thehandy";
   next.handyNativePositionScale = next.handyNativePositionScale === "unit" ? "unit" : "percent";
   next.handyNativeCommand = next.handyNativeCommand === "xat" ? "xat" : "xpt";
   next.handyNativeMin = clamp01(next.handyNativeMin);
@@ -336,6 +369,7 @@ function sanitizeMotionConfig(input) {
 
 motionConfig = sanitizeMotionConfig(motionConfig);
 nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
+nativeController.setApiBaseUrlV3(motionConfig.handyV3ApiBaseUrl);
 
 async function loadPersistedMotionConfig() {
   try {
@@ -347,6 +381,7 @@ async function loadPersistedMotionConfig() {
       ...parsed
     });
     nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
+    nativeController.setApiBaseUrlV3(motionConfig.handyV3ApiBaseUrl);
     strictMotionTagRuntime = motionConfig.strictMotionTag;
     // eslint-disable-next-line no-console
     console.log(`[config] loaded persisted config from ${CONFIG_FILE_PATH}`);
@@ -622,6 +657,9 @@ async function startPatternRunner(trigger, options = {}) {
 
 async function ensureReady() {
   if (!enabled) return;
+  if (startupParkPromise) {
+    await startupParkPromise.catch(() => {});
+  }
   const controller = getActiveController(motionConfig);
   const status = controller.getStatus?.() ?? {};
   if (ready && status.connected === true) return;
@@ -635,15 +673,19 @@ async function ensureReady() {
 
 app.get("/health", (_req, res) => {
   const activeController = getActiveController(motionConfig);
+  const activeStatus = activeController.getStatus();
+  const hspState = activeStatus?.hspState ?? null;
   res.json({
     ok: true,
     deviceEnabled: enabled,
     ready,
     controllerMode: motionConfig.controllerMode,
+    handyNativeProtocol: motionConfig.handyNativeProtocol,
     deadmanTimeoutMs: DEADMAN_TIMEOUT_MS,
     motionLikelyActive,
     lastMotionCommandAt,
-    controller: activeController.getStatus(),
+    controller: activeStatus,
+    hspState,
     controllers: {
       buttplug: buttplugController.getStatus(),
       "handy-native": nativeController.getStatus()
@@ -660,6 +702,8 @@ app.post("/config", (req, res) => {
     // Central place where extension UI values are validated before use.
     const previousMode = motionConfig.controllerMode;
     const previousApiUrl = motionConfig.handyApiBaseUrl;
+    const previousApiUrlV3 = motionConfig.handyV3ApiBaseUrl;
+    const previousV3ApiKey = motionConfig.handyV3ApiKey;
     const previousConnectionKey = motionConfig.handyConnectionKey;
     const previousProtocol = motionConfig.handyNativeProtocol;
     const previousScale = motionConfig.handyNativePositionScale;
@@ -668,10 +712,13 @@ app.post("/config", (req, res) => {
     const previousNativeMax = motionConfig.handyNativeMax;
     motionConfig = sanitizeMotionConfig(req.body ?? {});
     nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
+    nativeController.setApiBaseUrlV3(motionConfig.handyV3ApiBaseUrl);
     strictMotionTagRuntime = motionConfig.strictMotionTag;
     if (
       previousMode !== motionConfig.controllerMode
       || previousApiUrl !== motionConfig.handyApiBaseUrl
+      || previousApiUrlV3 !== motionConfig.handyV3ApiBaseUrl
+      || previousV3ApiKey !== motionConfig.handyV3ApiKey
       || previousConnectionKey !== motionConfig.handyConnectionKey
       || previousProtocol !== motionConfig.handyNativeProtocol
       || previousScale !== motionConfig.handyNativePositionScale
@@ -758,9 +805,7 @@ app.post("/motion", async (req, res) => {
 
   let patternTrigger = null;
   try {
-    if (!(motionConfig.controllerMode === "handy-native" && motionConfig.handyNativeProtocol === "hamp")) {
-      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
-    }
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -1007,10 +1052,11 @@ const server = app.listen(port, () => {
   );
 
   if (enabled && PARK_ON_START) {
-    void (async () => {
+    startupParkPromise = (async () => {
       try {
         const controller = getActiveController(motionConfig);
-        await ensureReady();
+        await controller.connectWithRetry(motionConfig);
+        ready = true;
         await controller.parkAtZero(motionConfig);
         markMotionStopped();
         // eslint-disable-next-line no-console
@@ -1018,6 +1064,8 @@ const server = app.listen(port, () => {
       } catch (error) {
         // eslint-disable-next-line no-console
         console.error("[startup] park-at-0 failed:", error);
+      } finally {
+        startupParkPromise = null;
       }
     })();
   }

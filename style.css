@@ -217,6 +217,22 @@
   color: #fff;
 }
 
+.tavernplug-safe-on-btn {
+  background: #2f7d32;
+  border-color: #2f7d32;
+  color: #fff;
+}
+
+.tavernplug-safe-off-btn {
+  background: #b32020;
+  border-color: #b32020;
+  color: #fff;
+}
+
+.tavernplug-safe-active {
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 35%, transparent);
+}
+
 .tavernplug-quick-stop {
   background: #b32020;
   border-color: #b32020;

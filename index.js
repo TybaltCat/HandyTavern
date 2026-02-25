@@ -3,7 +3,8 @@ const EXTENSION_NAME = "tavernplug-handy";
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   controllerMode: "handy-native",
-  handyNativeProtocol: "hrpp",
+  handyNativeProtocol: "hamp",
+  handyNativeBackend: "thehandy",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   handyNativePositionScale: "percent",
   handyNativeCommand: "xpt",
@@ -14,6 +15,7 @@ const DEFAULTS = {
   autoSend: true,
   paused: false,
   strictTagOnly: false,
+  showDebugInfo: true,
   advancedOpen: false,
   speedProfilesOpen: false,
   holdUntilNextCommand: true,
@@ -43,6 +45,23 @@ const DEFAULTS = {
   minimumAllowedStroke: 0,
   endpointSafetyPaddingPct: 3
 };
+const LOCKED_TECHNICAL_DEFAULTS = {
+  invertStroke: false,
+  handyNativePositionScale: "percent",
+  handyNativeCommand: "xpt",
+  handyNativeTrace: false,
+  handyNativeMinPct: 25,
+  handyNativeMaxPct: 75
+};
+
+function applyLockedTechnicalSettings(target) {
+  target.invertStroke = LOCKED_TECHNICAL_DEFAULTS.invertStroke;
+  target.handyNativePositionScale = LOCKED_TECHNICAL_DEFAULTS.handyNativePositionScale;
+  target.handyNativeCommand = LOCKED_TECHNICAL_DEFAULTS.handyNativeCommand;
+  target.handyNativeTrace = LOCKED_TECHNICAL_DEFAULTS.handyNativeTrace;
+  target.handyNativeMinPct = LOCKED_TECHNICAL_DEFAULTS.handyNativeMinPct;
+  target.handyNativeMaxPct = LOCKED_TECHNICAL_DEFAULTS.handyNativeMaxPct;
+}
 
 function getContextSafe() {
   return globalThis.SillyTavern?.getContext?.() ?? null;
@@ -65,11 +84,12 @@ function saveSettings() {
 const extensionSettingsStore = getExtensionSettingsStore() ?? {};
 const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
+applyLockedTechnicalSettings(settings);
 if (!["hamp", "hdsp", "hrpp"].includes(String(settings.handyNativeProtocol ?? "").toLowerCase())) {
-  settings.handyNativeProtocol = "hrpp";
+  settings.handyNativeProtocol = "hamp";
 }
-if (String(settings.handyNativeProtocol).toLowerCase() === "hamp") {
-  settings.handyNativeProtocol = "hrpp";
+if (!["thehandy", "builtin"].includes(String(settings.handyNativeBackend ?? "").toLowerCase())) {
+  settings.handyNativeBackend = "thehandy";
 }
 // Migrate older default profile where brisk was slower than normal.
 if (Number(settings.testSpeedBriskPct) === 40 && Number(settings.testSpeedNormalPct) === 55) {
@@ -163,6 +183,21 @@ function updateModeStateLine() {
     `Test: ${testModeActive ? "ON" : "OFF"}`,
     `Pattern: ${activePatternName ?? "OFF"}`
   ].join(" | ");
+}
+
+function updateSafeButtons() {
+  const onButton = document.querySelector(`#${EXTENSION_NAME}-safe-on`);
+  const offButton = document.querySelector(`#${EXTENSION_NAME}-safe-off`);
+  if (onButton) onButton.classList.toggle("tavernplug-safe-active", Boolean(settings.safeMode));
+  if (offButton) offButton.classList.toggle("tavernplug-safe-active", !settings.safeMode);
+}
+
+function applyDebugVisibility() {
+  const visible = Boolean(settings.showDebugInfo);
+  const display = visible ? "" : "none";
+  if (modeStateEl) modeStateEl.style.display = display;
+  if (healthEl) healthEl.style.display = display;
+  if (statusEl) statusEl.style.display = display;
 }
 
 function updateGlobalStrokeSlider(panel) {
@@ -316,18 +351,19 @@ async function syncConfig() {
   const payload = {
     controllerMode: String(settings.controllerMode ?? "buttplug"),
     handyNativeProtocol: String(settings.handyNativeProtocol ?? "hamp"),
+    handyNativeBackend: String(settings.handyNativeBackend ?? "thehandy"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
-    handyNativePositionScale: String(settings.handyNativePositionScale ?? "percent"),
-    handyNativeCommand: String(settings.handyNativeCommand ?? "xpt"),
-    handyNativeTrace: Boolean(settings.handyNativeTrace),
-    handyNativeMin: clampPercent(settings.handyNativeMinPct) / 100,
-    handyNativeMax: clampPercent(settings.handyNativeMaxPct) / 100,
+    handyNativePositionScale: LOCKED_TECHNICAL_DEFAULTS.handyNativePositionScale,
+    handyNativeCommand: LOCKED_TECHNICAL_DEFAULTS.handyNativeCommand,
+    handyNativeTrace: LOCKED_TECHNICAL_DEFAULTS.handyNativeTrace,
+    handyNativeMin: LOCKED_TECHNICAL_DEFAULTS.handyNativeMinPct / 100,
+    handyNativeMax: LOCKED_TECHNICAL_DEFAULTS.handyNativeMaxPct / 100,
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
     globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
     globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
     physicalMin: clampPercent(settings.physicalMinPct) / 100,
     physicalMax: clampPercent(settings.physicalMaxPct) / 100,
-    invertStroke: Boolean(settings.invertStroke),
+    invertStroke: LOCKED_TECHNICAL_DEFAULTS.invertStroke,
     strokeRange: clampPercent(settings.strokeRange) / 100,
     speedMin: clampPercent(settings.speedMin) / 100,
     speedMax: clampPercent(settings.speedMax) / 100,
@@ -409,6 +445,24 @@ async function sendMotionIfNeeded(message) {
 function onInputChange(event) {
   const { name, type } = event.target;
   if (!name || !Object.prototype.hasOwnProperty.call(settings, name)) return;
+  if (
+    name === "invertStroke"
+    || name === "handyNativePositionScale"
+    || name === "handyNativeCommand"
+    || name === "handyNativeTrace"
+    || name === "handyNativeMinPct"
+    || name === "handyNativeMaxPct"
+  ) {
+    applyLockedTechnicalSettings(settings);
+    if (type === "checkbox") {
+      event.target.checked = Boolean(settings[name]);
+    } else {
+      event.target.value = String(settings[name]);
+    }
+    saveSettings();
+    setStatus("Technical setting locked to safe default");
+    return;
+  }
 
   if (name === "safeMode" && type === "checkbox" && event.target.checked === false) {
     const confirmed = window.confirm(
@@ -429,6 +483,9 @@ function onInputChange(event) {
   }
   if (name === "handyApiBaseUrl") {
     settings[name] = String(settings[name] || "").trim();
+  }
+  if (name === "handyNativeBackend") {
+    settings[name] = String(settings[name]).toLowerCase() === "builtin" ? "builtin" : "thehandy";
   }
   if (name === "handyNativePositionScale") {
     settings[name] = String(settings[name]).toLowerCase() === "unit" ? "unit" : "percent";
@@ -517,7 +574,10 @@ function onInputChange(event) {
     settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
   }
   if (type === "number" && name === "cumDurationMs") {
-    settings[name] = Math.max(250, Math.min(120000, Number(settings[name]) || 6000));
+    const seconds = Number(settings[name]);
+    const clampedSeconds = Math.max(0.25, Math.min(120, Number.isFinite(seconds) ? seconds : 6));
+    settings[name] = Math.round(clampedSeconds * 1000);
+    event.target.value = String(clampedSeconds);
   }
   if (type === "number" && name === "pollIntervalMs") {
     settings[name] = Math.max(500, Math.min(60000, Number(settings[name]) || 3000));
@@ -558,6 +618,9 @@ function onInputChange(event) {
   if (name === "pollIntervalMs") {
     restartPolling();
     setStatus(`Poll interval set to ${settings.pollIntervalMs}ms`);
+  }
+  if (name === "showDebugInfo") {
+    applyDebugVisibility();
   }
   if (testModeActive && isLiveMotionControl) {
     // Re-send current mode so live adjustments apply immediately.
@@ -611,7 +674,14 @@ async function togglePause() {
     }
     return;
   }
-  setStatus("Resumed");
+  try {
+    const resumeSpeed = currentStyleSpeed("normal");
+    const resumeTag = `[motion: style=normal speed=${resumeSpeed} depth=middle duration=3s]`;
+    await postJson("/motion", { text: resumeTag });
+    setStatus(`Resumed: normal/middle @ ${resumeSpeed}`);
+  } catch (error) {
+    setStatus(`Resume error: ${error.message}`);
+  }
 }
 
 async function handleParkHold() {
@@ -906,6 +976,7 @@ async function toggleSafeMode(enabled) {
   saveSettings();
   await syncConfig();
   updateModeStateLine();
+  updateSafeButtons();
   setStatus(`Safe Mode ${settings.safeMode ? "ON" : "OFF"}`);
 }
 
@@ -984,80 +1055,12 @@ function renderSettingsPanel() {
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
     <div class="tavernplug-row">
-      <label>
-        <input type="checkbox" name="invertStroke" ${settings.invertStroke ? "checked" : ""} />
-        Invert Stroke Direction
-      </label>
-    </div>
-    <div class="tavernplug-row">
       <label>Pattern Interval (ms)</label>
       <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
     </div>
     <div class="tavernplug-actions">
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
       <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
-    </div>
-    <div class="tavernplug-advanced-body" style="display:none;">
-    <div class="tavernplug-row">
-      <label>Handy Native API Base URL</label>
-      <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Native Position Scale</label>
-      <select name="handyNativePositionScale" class="tavernplug-native-select">
-        <option value="percent" ${settings.handyNativePositionScale === "percent" ? "selected" : ""}>0..100 (xpt percent)</option>
-        <option value="unit" ${settings.handyNativePositionScale === "unit" ? "selected" : ""}>0..1 (normalized)</option>
-      </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Native Motion Command</label>
-      <select name="handyNativeCommand" class="tavernplug-native-select">
-        <option value="xpt" ${settings.handyNativeCommand === "xpt" ? "selected" : ""}>/hdsp/xpt (percent/normalized target + time)</option>
-        <option value="xat" ${settings.handyNativeCommand === "xat" ? "selected" : ""}>/hdsp/xat (absolute target + time)</option>
-      </select>
-      <label>
-        <input type="checkbox" name="handyNativeTrace" ${settings.handyNativeTrace ? "checked" : ""} />
-        Native trace logs (request/response)
-      </label>
-    </div>
-    <div class="tavernplug-row">
-      <label>Native Position Window (0-100)</label>
-      <div class="tavernplug-inline">
-        <input type="number" step="1" min="0" max="100" name="handyNativeMinPct" value="${settings.handyNativeMinPct}" />
-        <span>to</span>
-        <input type="number" step="1" min="0" max="100" name="handyNativeMaxPct" value="${settings.handyNativeMaxPct}" />
-      </div>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Style</label>
-      <select name="cumStyle">
-        <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
-        <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
-        <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
-        <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
-        <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
-      </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Depth</label>
-      <select name="cumDepth">
-        <option value="tip" ${settings.cumDepth === "tip" ? "selected" : ""}>Tip</option>
-        <option value="middle" ${settings.cumDepth === "middle" ? "selected" : ""}>Middle</option>
-        <option value="full" ${settings.cumDepth === "full" ? "selected" : ""}>Full</option>
-        <option value="deep" ${settings.cumDepth === "deep" ? "selected" : ""}>Deep</option>
-      </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Speed (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="cumSpeedPct" value="${settings.cumSpeedPct}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Duration (ms)</label>
-      <input type="number" step="100" min="250" max="120000" name="cumDurationMs" value="${settings.cumDurationMs}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Message Check Interval (ms)</label>
-      <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
     </div>
     <div class="tavernplug-speed-profiles-body" style="display:none;">
       <div class="tavernplug-row">
@@ -1101,6 +1104,59 @@ function renderSettingsPanel() {
         </div>
       </div>
     </div>
+    <div class="tavernplug-advanced-body" style="display:none;">
+    <div class="tavernplug-row">
+      <label>Handy Native API Base URL</label>
+      <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Technical Motion Settings</label>
+      <div>Locked defaults: Invert Stroke OFF, Native Scale = percent, Command = xpt, Trace OFF, Native Window = 25..75</div>
+    </div>
+    <div class="tavernplug-row">
+      <label>Native Backend</label>
+      <select name="handyNativeBackend" class="tavernplug-native-select">
+        <option value="thehandy" ${settings.handyNativeBackend === "thehandy" ? "selected" : ""}>thehandy wrapper (Recommended)</option>
+        <option value="builtin" ${settings.handyNativeBackend === "builtin" ? "selected" : ""}>Built-in HTTP calls</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Style</label>
+      <select name="cumStyle">
+        <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
+        <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
+        <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
+        <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
+        <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Depth</label>
+      <select name="cumDepth">
+        <option value="tip" ${settings.cumDepth === "tip" ? "selected" : ""}>Tip</option>
+        <option value="middle" ${settings.cumDepth === "middle" ? "selected" : ""}>Middle</option>
+        <option value="full" ${settings.cumDepth === "full" ? "selected" : ""}>Full</option>
+        <option value="deep" ${settings.cumDepth === "deep" ? "selected" : ""}>Deep</option>
+      </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Speed (0-100)</label>
+      <input type="number" step="1" min="0" max="100" name="cumSpeedPct" value="${settings.cumSpeedPct}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Cum Button Duration (seconds)</label>
+      <input type="number" step="0.25" min="0.25" max="120" name="cumDurationMs" value="${(Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000)) / 1000).toFixed(2).replace(/\.?0+$/, "")}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Message Check Interval (ms)</label>
+      <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>
+        <input type="checkbox" name="showDebugInfo" ${settings.showDebugInfo ? "checked" : ""} />
+        Show debug status lines
+      </label>
+    </div>
     </div>
     <div class="tavernplug-row">
       <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
@@ -1115,10 +1171,6 @@ function renderSettingsPanel() {
       <label>
         <input type="checkbox" name="holdUntilNextCommand" ${settings.holdUntilNextCommand ? "checked" : ""} />
         Hold motion until next command
-      </label>
-      <label>
-        <input type="checkbox" name="safeMode" ${settings.safeMode ? "checked" : ""} />
-        Safe Mode
       </label>
     </div>
     <div class="tavernplug-actions">
@@ -1153,8 +1205,8 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-off">Hold OFF</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-on">Strict ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-off">Strict OFF</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
+      <button class="menu_button tavernplug-safe-on-btn" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
+      <button class="menu_button tavernplug-safe-off-btn" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-park-hold">Park at 0</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
@@ -1319,6 +1371,8 @@ function renderSettingsPanel() {
   healthEl = panel.querySelector(`#${EXTENSION_NAME}-health`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
   updateModeStateLine();
+  updateSafeButtons();
+  applyDebugVisibility();
   updateQuickPauseButton();
 }
 
@@ -1416,7 +1470,15 @@ function startHealthPolling() {
       const device = health?.controller?.selectedDevice || "none";
       const active = health?.motionLikelyActive ? "active" : "idle";
       const mode = health?.controllerMode || settings.controllerMode || "buttplug";
-      setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
+      const hsp = health?.hspState;
+      const nativeProtocol = String(health?.handyNativeProtocol || settings.handyNativeProtocol || "hamp").toLowerCase();
+      const hspBits = hsp && typeof hsp === "object"
+        ? ` | HSP: state=${hsp.play_state ?? "?"} loop=${hsp.loop ?? "?"} rate=${hsp.playback_rate ?? "?"}`
+        : "";
+      const depthBits = mode === "handy-native" && nativeProtocol === "hamp"
+        ? " | Depth: limited (HAMP mode)"
+        : "";
+      setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}${hspBits}${depthBits}`);
       setSyncButtonConnected(Boolean(health?.controller?.connected));
     } catch (error) {
       healthFailureCount += 1;
