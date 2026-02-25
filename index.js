@@ -5,6 +5,8 @@ const DEFAULTS = {
   controllerMode: "handy-native",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   handyNativePositionScale: "percent",
+  handyNativeCommand: "xpt",
+  handyNativeTrace: false,
   handyNativeMinPct: 25,
   handyNativeMaxPct: 75,
   pollIntervalMs: 2000,
@@ -12,6 +14,7 @@ const DEFAULTS = {
   paused: false,
   strictTagOnly: false,
   advancedOpen: false,
+  speedProfilesOpen: false,
   holdUntilNextCommand: true,
   stopPreviousOnNewMotion: true,
   panelCollapsed: false,
@@ -217,6 +220,19 @@ function setAdvancedOpen(panel, open) {
   saveSettings();
 }
 
+function setSpeedProfilesOpen(panel, open) {
+  settings.speedProfilesOpen = Boolean(open);
+  const body = panel.querySelector(".tavernplug-speed-profiles-body");
+  const button = panel.querySelector(".tavernplug-speed-profiles-toggle");
+  if (body) body.style.display = settings.speedProfilesOpen ? "block" : "none";
+  if (button) {
+    button.textContent = settings.speedProfilesOpen
+      ? "Speed Profiles (-)"
+      : "Speed Profiles (+)";
+  }
+  saveSettings();
+}
+
 function messageHasMotionTag(text) {
   return /\[motion:\s*[^\]]+\]/i.test(text);
 }
@@ -291,6 +307,8 @@ async function syncConfig() {
     controllerMode: String(settings.controllerMode ?? "buttplug"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
     handyNativePositionScale: String(settings.handyNativePositionScale ?? "percent"),
+    handyNativeCommand: String(settings.handyNativeCommand ?? "xpt"),
+    handyNativeTrace: Boolean(settings.handyNativeTrace),
     handyNativeMin: clampPercent(settings.handyNativeMinPct) / 100,
     handyNativeMax: clampPercent(settings.handyNativeMaxPct) / 100,
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
@@ -403,6 +421,9 @@ function onInputChange(event) {
   }
   if (name === "handyNativePositionScale") {
     settings[name] = String(settings[name]).toLowerCase() === "unit" ? "unit" : "percent";
+  }
+  if (name === "handyNativeCommand") {
+    settings[name] = String(settings[name]).toLowerCase() === "xat" ? "xat" : "xpt";
   }
   if (
     type === "number" &&
@@ -977,6 +998,17 @@ function renderSettingsPanel() {
       </select>
     </div>
     <div class="tavernplug-row">
+      <label>Native Motion Command</label>
+      <select name="handyNativeCommand">
+        <option value="xpt" ${settings.handyNativeCommand === "xpt" ? "selected" : ""}>/hdsp/xpt (percent/normalized target + time)</option>
+        <option value="xat" ${settings.handyNativeCommand === "xat" ? "selected" : ""}>/hdsp/xat (absolute target + time)</option>
+      </select>
+      <label>
+        <input type="checkbox" name="handyNativeTrace" ${settings.handyNativeTrace ? "checked" : ""} />
+        Native trace logs (request/response)
+      </label>
+    </div>
+    <div class="tavernplug-row">
       <label>Native Position Window (0-100)</label>
       <div class="tavernplug-inline">
         <input type="number" step="1" min="0" max="100" name="handyNativeMinPct" value="${settings.handyNativeMinPct}" />
@@ -1016,43 +1048,48 @@ function renderSettingsPanel() {
       <input type="number" step="100" min="500" max="60000" name="pollIntervalMs" value="${settings.pollIntervalMs}" />
     </div>
     <div class="tavernplug-row">
-      <label>Gentle Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-down">-10</button>
-        <input id="${styleSpeedInputId("gentle")}" type="number" step="1" min="0" max="100" name="testSpeedGentlePct" value="${settings.testSpeedGentlePct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-up">+10</button>
-      </div>
+      <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
     </div>
-    <div class="tavernplug-row">
-      <label>Normal Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-down">-10</button>
-        <input id="${styleSpeedInputId("normal")}" type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-up">+10</button>
+    <div class="tavernplug-speed-profiles-body" style="display:none;">
+      <div class="tavernplug-row">
+        <label>Gentle Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-down">-10</button>
+          <input id="${styleSpeedInputId("gentle")}" type="number" step="1" min="0" max="100" name="testSpeedGentlePct" value="${settings.testSpeedGentlePct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-up">+10</button>
+        </div>
       </div>
-    </div>
-    <div class="tavernplug-row">
-      <label>Brisk Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-down">-10</button>
-        <input id="${styleSpeedInputId("brisk")}" type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-up">+10</button>
+      <div class="tavernplug-row">
+        <label>Normal Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-down">-10</button>
+          <input id="${styleSpeedInputId("normal")}" type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-up">+10</button>
+        </div>
       </div>
-    </div>
-    <div class="tavernplug-row">
-      <label>Hard Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-down">-10</button>
-        <input id="${styleSpeedInputId("hard")}" type="number" step="1" min="0" max="100" name="testSpeedHardPct" value="${settings.testSpeedHardPct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-up">+10</button>
+      <div class="tavernplug-row">
+        <label>Brisk Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-down">-10</button>
+          <input id="${styleSpeedInputId("brisk")}" type="number" step="1" min="0" max="100" name="testSpeedBriskPct" value="${settings.testSpeedBriskPct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-brisk-up">+10</button>
+        </div>
       </div>
-    </div>
-    <div class="tavernplug-row">
-      <label>Intense Speed %</label>
-      <div class="tavernplug-inline">
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-down">-10</button>
-        <input id="${styleSpeedInputId("intense")}" type="number" step="1" min="0" max="100" name="testSpeedIntensePct" value="${settings.testSpeedIntensePct}" />
-        <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-up">+10</button>
+      <div class="tavernplug-row">
+        <label>Hard Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-down">-10</button>
+          <input id="${styleSpeedInputId("hard")}" type="number" step="1" min="0" max="100" name="testSpeedHardPct" value="${settings.testSpeedHardPct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-hard-up">+10</button>
+        </div>
+      </div>
+      <div class="tavernplug-row">
+        <label>Intense Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-down">-10</button>
+          <input id="${styleSpeedInputId("intense")}" type="number" step="1" min="0" max="100" name="testSpeedIntensePct" value="${settings.testSpeedIntensePct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-up">+10</button>
+        </div>
       </div>
     </div>
     </div>
@@ -1256,10 +1293,14 @@ function renderSettingsPanel() {
   panel.querySelector(".tavernplug-advanced-toggle")?.addEventListener("click", () => {
     setAdvancedOpen(panel, !settings.advancedOpen);
   });
+  panel.querySelector(".tavernplug-speed-profiles-toggle")?.addEventListener("click", () => {
+    setSpeedProfilesOpen(panel, !settings.speedProfilesOpen);
+  });
   panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
     setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
   });
   setAdvancedOpen(panel, settings.advancedOpen);
+  setSpeedProfilesOpen(panel, settings.speedProfilesOpen);
   setPanelCollapsed(panel, settings.panelCollapsed);
   updateGlobalStrokeSlider(panel);
   updateGlobalSpeedSlider(panel);
