@@ -4,6 +4,7 @@ const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
   controllerMode: "handy-native",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
+  handyNativePositionScale: "percent",
   pollIntervalMs: 2000,
   autoSend: true,
   paused: false,
@@ -285,6 +286,7 @@ async function syncConfig() {
   const payload = {
     controllerMode: String(settings.controllerMode ?? "buttplug"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
+    handyNativePositionScale: String(settings.handyNativePositionScale ?? "percent"),
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
     globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
     globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
@@ -392,6 +394,9 @@ function onInputChange(event) {
   }
   if (name === "handyApiBaseUrl") {
     settings[name] = String(settings[name] || "").trim();
+  }
+  if (name === "handyNativePositionScale") {
+    settings[name] = String(settings[name]).toLowerCase() === "unit" ? "unit" : "percent";
   }
   if (
     type === "number" &&
@@ -941,6 +946,13 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Handy Native API Base URL</label>
       <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Native Position Scale</label>
+      <select name="handyNativePositionScale">
+        <option value="percent" ${settings.handyNativePositionScale === "percent" ? "selected" : ""}>0..100 (xpt percent)</option>
+        <option value="unit" ${settings.handyNativePositionScale === "unit" ? "selected" : ""}>0..1 (normalized)</option>
+      </select>
     </div>
     <div class="tavernplug-row">
       <label>Cum Button Style</label>
