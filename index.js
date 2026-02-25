@@ -300,8 +300,25 @@ async function syncConfig() {
     healthPollingPaused = false;
     startHealthPolling();
     setStatus("Config synced");
+    return true;
   } catch (error) {
     setStatus(`Config error: ${error.message}. Is bridge running on ${settings.bridgeUrl}?`);
+    return false;
+  }
+}
+
+async function handleSyncAndTestConnection() {
+  const synced = await syncConfig();
+  if (!synced) return;
+  try {
+    const result = await postJson("/connect", {});
+    const mode = result?.mode || settings.controllerMode;
+    const connected = result?.controller?.connected ? "connected" : "disconnected";
+    const device = result?.controller?.selectedDevice || "none";
+    setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: idle`);
+    setStatus(`Connected (${mode})`);
+  } catch (error) {
+    setStatus(`Connect test failed: ${error.message}`);
   }
 }
 
@@ -856,6 +873,7 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Bridge URL</label>
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-sync-test">Sync + Test Connection</button>
     </div>
     <div class="tavernplug-row">
       <label>Controller Backend</label>
@@ -1058,6 +1076,9 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-test`)?.addEventListener("click", () => {
     void handleTestMotion();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-sync-test`)?.addEventListener("click", () => {
+    void handleSyncAndTestConnection();
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
     stopPatternMode(false);

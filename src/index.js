@@ -563,6 +563,25 @@ app.post("/config", (req, res) => {
   }
 });
 
+app.post("/connect", async (_req, res) => {
+  try {
+    const controller = getActiveController(motionConfig);
+    await ensureReady();
+    return res.json({
+      ok: true,
+      mode: motionConfig.controllerMode,
+      controller: controller.getStatus()
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      mode: motionConfig.controllerMode,
+      error: error instanceof Error ? error.message : String(error),
+      controller: getActiveController(motionConfig).getStatus()
+    });
+  }
+});
+
 app.post("/emergency-stop", async (_req, res) => {
   try {
     const controller = getActiveController(motionConfig);
