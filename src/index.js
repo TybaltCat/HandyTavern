@@ -69,7 +69,7 @@ let deadmanEngaged = false;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   controllerMode:
-    String(process.env.CONTROLLER_MODE ?? "buttplug").toLowerCase() === "handy-native"
+    String(process.env.CONTROLLER_MODE ?? "handy-native").toLowerCase() === "handy-native"
       ? "handy-native"
       : "buttplug",
   handyConnectionKey: process.env.HANDY_CONNECTION_KEY ?? "",
@@ -85,6 +85,7 @@ let motionConfig = {
   speedMin: Number(process.env.SPEED_MIN ?? 0),
   speedMax: Number(process.env.SPEED_MAX ?? 1),
   minimumAllowedStroke: Number(process.env.MINIMUM_ALLOWED_STROKE ?? 0),
+  endpointSafetyPadding: Number(process.env.ENDPOINT_SAFETY_PADDING ?? 0.03),
   safeMode: String(process.env.SAFE_MODE ?? "true").toLowerCase() === "true",
   safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.75),
   holdUntilNextCommand:
@@ -164,6 +165,10 @@ function sanitizeMotionConfig(input) {
       input.minimumAllowedStroke === undefined
         ? motionConfig.minimumAllowedStroke
         : Number(input.minimumAllowedStroke),
+    endpointSafetyPadding:
+      input.endpointSafetyPadding === undefined
+        ? motionConfig.endpointSafetyPadding
+        : Number(input.endpointSafetyPadding),
     safeMode:
       input.safeMode === undefined
         ? motionConfig.safeMode
@@ -213,6 +218,9 @@ function sanitizeMotionConfig(input) {
   if (!Number.isFinite(next.safeMaxSpeed)) {
     throw new Error("safeMaxSpeed must be a number between 0 and 1");
   }
+  if (!Number.isFinite(next.endpointSafetyPadding)) {
+    throw new Error("endpointSafetyPadding must be a number between 0 and 0.2");
+  }
   if (!next.handyApiBaseUrl) {
     throw new Error("handyApiBaseUrl must be a non-empty URL");
   }
@@ -225,6 +233,7 @@ function sanitizeMotionConfig(input) {
   next.speedMin = clamp01(next.speedMin);
   next.speedMax = clamp01(next.speedMax);
   next.minimumAllowedStroke = clamp01(next.minimumAllowedStroke);
+  next.endpointSafetyPadding = Math.max(0, Math.min(0.2, next.endpointSafetyPadding));
   next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
   next.controllerMode = getControllerMode(next.controllerMode);
 
@@ -798,6 +807,7 @@ app.post("/preview-motion", (req, res) => {
         physicalMax: motionConfig.physicalMax,
         invertStroke: motionConfig.invertStroke,
         minimumAllowedStroke: motionConfig.minimumAllowedStroke,
+        endpointSafetyPadding: motionConfig.endpointSafetyPadding,
         safeMode: motionConfig.safeMode,
         safeMaxSpeed: motionConfig.safeMaxSpeed,
         holdUntilNextCommand: motionConfig.holdUntilNextCommand
@@ -843,6 +853,7 @@ app.post("/preview-motion", (req, res) => {
       physicalMax: motionConfig.physicalMax,
       invertStroke: motionConfig.invertStroke,
       minimumAllowedStroke: motionConfig.minimumAllowedStroke,
+      endpointSafetyPadding: motionConfig.endpointSafetyPadding,
       safeMode: motionConfig.safeMode,
       safeMaxSpeed: motionConfig.safeMaxSpeed,
       holdUntilNextCommand: motionConfig.holdUntilNextCommand

@@ -97,14 +97,20 @@ export class HandyNativeController {
     if (!key) {
       throw new Error("Handy connection key is required for native mode.");
     }
-    const url = `${this.apiBaseUrl}${path}?connectionKey=${encodeURIComponent(key)}`;
+    const keyParam = encodeURIComponent(key);
+    // API variants use either connectionKey or key as query parameter.
+    const sep = path.includes("?") ? "&" : "?";
+    const url = `${this.apiBaseUrl}${path}${sep}connectionKey=${keyParam}&key=${keyParam}`;
+    const mergedBody =
+      body === undefined ? undefined : { connectionKey: key, key, ...body };
     const response = await fetch(url, {
       method,
       headers: {
         "Content-Type": "application/json",
-        "X-Client-Name": this.clientName
+        "X-Client-Name": this.clientName,
+        "X-Connection-Key": key
       },
-      body: body === undefined ? undefined : JSON.stringify(body)
+      body: mergedBody === undefined ? undefined : JSON.stringify(mergedBody)
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
@@ -194,6 +200,13 @@ export class HandyNativeController {
     const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
     const minStroke = Math.min(mappedStart, mappedEnd);
     const maxStroke = Math.max(mappedStart, mappedEnd);
+    // Keep away from absolute physical endpoints to reduce end-stop impacts.
+    const endpointPad = Math.max(
+      0,
+      Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03))
+    );
+    const safeMinStroke = clamp01(Math.max(minStroke, endpointPad));
+    const safeMaxStroke = clamp01(Math.min(maxStroke, 1 - endpointPad));
 
     const baseHalfCycleMs = Math.max(
       20,
@@ -229,11 +242,11 @@ export class HandyNativeController {
       if (sequence !== this.motionSequence) return;
 
       if (toMax) {
-        await this.sendHdspXpt(maxStroke, halfCycleMs, motionConfig);
-        await this.sendHdspXpt(minStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(safeMaxStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(safeMinStroke, halfCycleMs, motionConfig);
       } else {
-        await this.sendHdspXpt(minStroke, halfCycleMs, motionConfig);
-        await this.sendHdspXpt(maxStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(safeMinStroke, halfCycleMs, motionConfig);
+        await this.sendHdspXpt(safeMaxStroke, halfCycleMs, motionConfig);
       }
       lastDispatchAt = nowMs();
       toMax = !toMax;

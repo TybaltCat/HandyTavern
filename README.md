@@ -1,6 +1,8 @@
 # TavernPlug
 
-Parses text (from SillyTavern or any local source) into motion intent and sends commands to a Buttplug-compatible device, including Handy V2 through an Intiface/Buttplug server.
+Parses text (from SillyTavern or any local source) into motion intent and sends commands to Handy V2.
+
+Default backend is now Handy Native (Wi-Fi). Buttplug/Intiface remains available as a fallback backend.
 
 ## What this does
 
@@ -25,13 +27,22 @@ Parses text (from SillyTavern or any local source) into motion intent and sends 
 
 You should get a JSON response with parsed motion.
 
-## Device mode
+## Device mode (default: Handy Native)
 
-1. Start your local Buttplug server (for example Intiface Desktop).
-2. Pair your Handy V2 in that server.
-3. Set in `.env`:
+1. Set in `.env`:
    - `ENABLE_DEVICE=true`
-4. Restart this service.
+   - `CONTROLLER_MODE=handy-native`
+   - `HANDY_CONNECTION_KEY=<your key>`
+2. Restart this service.
+
+Optional fallback mode (Buttplug):
+
+1. Start Intiface Desktop and pair your Handy.
+2. Set in `.env`:
+   - `ENABLE_DEVICE=true`
+   - `CONTROLLER_MODE=buttplug`
+   - `BUTTPLUG_WS_URL=ws://127.0.0.1:12345`
+3. Restart this service.
 
 ## SillyTavern integration idea
 
@@ -49,7 +60,9 @@ Then reload SillyTavern and open Extensions settings.
 
 The extension UI lets you set:
 
+- Controller backend (Handy Native or Buttplug)
 - Handy Connection Key
+- Handy Native API base URL
 - Stroke Range
 - Speed Range Min/Max
 - Minimum Allowed Stroke
@@ -80,6 +93,8 @@ Strict mode is enabled by default (`STRICT_MOTION_TAG=true`). The motion tag is 
 - `POST /motion` with `{ "text": "[motion: ...]" }`
 - `POST /preview-motion` with `{ "text": "[motion: ...]" }` (parse + transform preview only, no device command)
 - `POST /config` with:
+  - `controllerMode` (`handy-native` or `buttplug`)
+  - `handyApiBaseUrl` (string URL)
   - `handyConnectionKey` (string)
   - `strokeRange` (0..1)
   - `globalStrokeMin` (0..1)
@@ -93,9 +108,10 @@ Strict mode is enabled by default (`STRICT_MOTION_TAG=true`). The motion tag is 
   - `holdUntilNextCommand` (boolean)
   - `stopPreviousOnNewMotion` (boolean)
 - `POST /emergency-stop` to force stop
+- `POST /connect` to test selected backend/device connection
 
 ## Notes
 
-- This implementation sends scalar/vibrate style intensity. If your Handy setup expects linear stroke commands, you can expand `src/handyController.js` with `linear` command mapping.
-- `handyConnectionKey` is accepted and stored by the bridge so the extension can manage it in one place; direct Handy cloud authentication is not used by Buttplug mode.
+- Native mode uses Handy API + connection key and is now the default path.
+- Buttplug mode is still supported for Intiface/Bluetooth setups.
 - Keep this strictly local (`127.0.0.1`) unless you add authentication and transport security.

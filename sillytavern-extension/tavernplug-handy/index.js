@@ -2,7 +2,7 @@ const EXTENSION_NAME = "tavernplug-handy";
 // Add new extension-level settings defaults here.
 const DEFAULTS = {
   bridgeUrl: "http://127.0.0.1:8787",
-  controllerMode: "buttplug",
+  controllerMode: "handy-native",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   pollIntervalMs: 2000,
   autoSend: true,
@@ -33,7 +33,8 @@ const DEFAULTS = {
   strokeRange: 100,
   speedMin: 0,
   speedMax: 75,
-  minimumAllowedStroke: 0
+  minimumAllowedStroke: 0,
+  endpointSafetyPaddingPct: 3
 };
 
 function getContextSafe() {
@@ -77,6 +78,7 @@ normalizePercentSetting("globalStrokeMinPct");
 normalizePercentSetting("globalStrokeMaxPct");
 normalizePercentSetting("physicalMinPct");
 normalizePercentSetting("physicalMaxPct");
+normalizePercentSetting("endpointSafetyPaddingPct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -287,6 +289,7 @@ async function syncConfig() {
     speedMin: clampPercent(settings.speedMin) / 100,
     speedMax: clampPercent(settings.speedMax) / 100,
     minimumAllowedStroke: clampPercent(settings.minimumAllowedStroke) / 100,
+    endpointSafetyPadding: Math.max(0, Math.min(20, clampPercent(settings.endpointSafetyPaddingPct))) / 100,
     safeMode: Boolean(settings.safeMode),
     safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
     strictMotionTag: Boolean(settings.strictTagOnly),
@@ -399,13 +402,17 @@ function onInputChange(event) {
       "globalStrokeMinPct",
       "globalStrokeMaxPct",
       "physicalMinPct",
-      "physicalMaxPct"
+      "physicalMaxPct",
+      "endpointSafetyPaddingPct"
     ].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
   }
   if (name === "safeMaxSpeed") {
     settings[name] = Math.min(75, clampPercent(settings[name]));
+  }
+  if (name === "endpointSafetyPaddingPct") {
+    settings[name] = Math.max(0, Math.min(20, clampPercent(settings[name])));
   }
   if (name === "globalStrokeMinPct" && Number(settings.globalStrokeMinPct) > Number(settings.globalStrokeMaxPct)) {
     settings.globalStrokeMaxPct = settings.globalStrokeMinPct;
@@ -463,7 +470,8 @@ function onInputChange(event) {
     "globalStrokeMinPct",
     "globalStrokeMaxPct",
     "physicalMinPct",
-    "physicalMaxPct"
+    "physicalMaxPct",
+    "endpointSafetyPaddingPct"
   ].includes(name);
   const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
   if (name === "globalStrokeMinPct" || name === "globalStrokeMaxPct") {
@@ -883,6 +891,10 @@ function renderSettingsPanel() {
       </select>
     </div>
     <div class="tavernplug-row">
+      <label>Handy Connection Key</label>
+      <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
+    </div>
+    <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
       <div class="tavernplug-global-range">
         <input class="tavernplug-range-min" type="range" step="1" min="0" max="100" name="globalStrokeMinPct" value="${settings.globalStrokeMinPct}" />
@@ -923,10 +935,6 @@ function renderSettingsPanel() {
       <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
     </div>
     <div class="tavernplug-row">
-      <label>Handy Connection Key</label>
-      <input type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
-    </div>
-    <div class="tavernplug-row">
       <label>Cum Button Style</label>
       <select name="cumStyle">
         <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
@@ -964,6 +972,10 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Minimum Allowed Stroke (0-100)</label>
       <input type="number" step="1" min="0" max="100" name="minimumAllowedStroke" value="${settings.minimumAllowedStroke}" />
+    </div>
+    <div class="tavernplug-row">
+      <label>Endpoint Safety Padding (0-20)</label>
+      <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
     </div>
     <div class="tavernplug-row">
       <label>Gentle Speed %</label>
