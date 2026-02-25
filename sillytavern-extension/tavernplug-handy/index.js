@@ -53,6 +53,7 @@ const LOCKED_TECHNICAL_DEFAULTS = {
   handyNativeMinPct: 25,
   handyNativeMaxPct: 75
 };
+const LOCKED_CONTROLLER_MODE = "handy-native";
 
 function applyLockedTechnicalSettings(target) {
   target.invertStroke = LOCKED_TECHNICAL_DEFAULTS.invertStroke;
@@ -84,6 +85,7 @@ function saveSettings() {
 const extensionSettingsStore = getExtensionSettingsStore() ?? {};
 const settings = extensionSettingsStore[EXTENSION_NAME] ?? {};
 Object.assign(settings, DEFAULTS, settings);
+settings.controllerMode = LOCKED_CONTROLLER_MODE;
 applyLockedTechnicalSettings(settings);
 if (!["hamp", "hdsp", "hrpp"].includes(String(settings.handyNativeProtocol ?? "").toLowerCase())) {
   settings.handyNativeProtocol = "hamp";
@@ -186,10 +188,45 @@ function updateModeStateLine() {
 }
 
 function updateSafeButtons() {
-  const onButton = document.querySelector(`#${EXTENSION_NAME}-safe-on`);
-  const offButton = document.querySelector(`#${EXTENSION_NAME}-safe-off`);
-  if (onButton) onButton.classList.toggle("tavernplug-safe-active", Boolean(settings.safeMode));
-  if (offButton) offButton.classList.toggle("tavernplug-safe-active", !settings.safeMode);
+  const button = document.querySelector(`#${EXTENSION_NAME}-safe-toggle`);
+  if (!button) return;
+  if (settings.safeMode) {
+    button.textContent = "Safe ON";
+    button.classList.add("tavernplug-safe-on-btn");
+    button.classList.remove("tavernplug-safe-off-btn");
+  } else {
+    button.textContent = "Safe OFF";
+    button.classList.add("tavernplug-safe-off-btn");
+    button.classList.remove("tavernplug-safe-on-btn");
+  }
+}
+
+function updateHoldButton() {
+  const button = document.querySelector(`#${EXTENSION_NAME}-hold-toggle`);
+  if (!button) return;
+  if (settings.holdUntilNextCommand) {
+    button.textContent = "Hold ON";
+    button.classList.add("tavernplug-hold-on-btn");
+    button.classList.remove("tavernplug-hold-off-btn");
+  } else {
+    button.textContent = "Hold OFF";
+    button.classList.add("tavernplug-hold-off-btn");
+    button.classList.remove("tavernplug-hold-on-btn");
+  }
+}
+
+function updateStrictButton() {
+  const button = document.querySelector(`#${EXTENSION_NAME}-strict-toggle`);
+  if (!button) return;
+  if (settings.strictTagOnly) {
+    button.textContent = "Strict ON";
+    button.classList.add("tavernplug-strict-on-btn");
+    button.classList.remove("tavernplug-strict-off-btn");
+  } else {
+    button.textContent = "Strict OFF";
+    button.classList.add("tavernplug-strict-off-btn");
+    button.classList.remove("tavernplug-strict-on-btn");
+  }
 }
 
 function applyDebugVisibility() {
@@ -349,7 +386,7 @@ function getAssistantMessageFromContext() {
 async function syncConfig() {
   // Keep this payload aligned with POST /config in src/index.js.
   const payload = {
-    controllerMode: String(settings.controllerMode ?? "buttplug"),
+    controllerMode: LOCKED_CONTROLLER_MODE,
     handyNativeProtocol: String(settings.handyNativeProtocol ?? "hamp"),
     handyNativeBackend: String(settings.handyNativeBackend ?? "thehandy"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
@@ -445,6 +482,14 @@ async function sendMotionIfNeeded(message) {
 function onInputChange(event) {
   const { name, type } = event.target;
   if (!name || !Object.prototype.hasOwnProperty.call(settings, name)) return;
+  if (name === "controllerMode") {
+    settings.controllerMode = LOCKED_CONTROLLER_MODE;
+    event.target.value = LOCKED_CONTROLLER_MODE;
+    saveSettings();
+    setStatus("Controller backend locked to Handy Native");
+    return;
+  }
+
   if (
     name === "invertStroke"
     || name === "handyNativePositionScale"
@@ -475,12 +520,6 @@ function onInputChange(event) {
   }
 
   settings[name] = type === "checkbox" ? event.target.checked : event.target.value;
-  if (name === "controllerMode") {
-    settings[name] = String(settings[name]).toLowerCase() === "handy-native"
-      ? "handy-native"
-      : "buttplug";
-    updateModeStateLine();
-  }
   if (name === "handyApiBaseUrl") {
     settings[name] = String(settings[name] || "").trim();
   }
@@ -985,6 +1024,7 @@ async function toggleHoldMode(enabled) {
   saveSettings();
   await syncConfig();
   updateModeStateLine();
+  updateHoldButton();
   setStatus(`Hold Until Next Command ${settings.holdUntilNextCommand ? "ON" : "OFF"}`);
 }
 
@@ -992,6 +1032,7 @@ function toggleStrictMode(enabled) {
   settings.strictTagOnly = Boolean(enabled);
   saveSettings();
   updateModeStateLine();
+  updateStrictButton();
   setStatus(`Strict Tags ${settings.strictTagOnly ? "ON" : "OFF"}`);
 }
 
@@ -1019,13 +1060,6 @@ function renderSettingsPanel() {
     <div class="tavernplug-row">
       <label>Bridge URL</label>
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Controller Backend</label>
-      <select name="controllerMode">
-        <option value="buttplug" ${settings.controllerMode === "buttplug" ? "selected" : ""}>Buttplug (Intiface/Bluetooth)</option>
-        <option value="handy-native" ${settings.controllerMode === "handy-native" ? "selected" : ""}>Handy Native (Wi-Fi)</option>
-      </select>
     </div>
     <div class="tavernplug-row">
       <label>Handy Connection Key</label>
@@ -1201,12 +1235,9 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
     </div>
     <div class="tavernplug-actions">
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-on">Hold ON</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-hold-off">Hold OFF</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-on">Strict ON</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-strict-off">Strict OFF</button>
-      <button class="menu_button tavernplug-safe-on-btn" type="button" id="${EXTENSION_NAME}-safe-on">Safe ON</button>
-      <button class="menu_button tavernplug-safe-off-btn" type="button" id="${EXTENSION_NAME}-safe-off">Safe OFF</button>
+      <button class="menu_button tavernplug-hold-on-btn" type="button" id="${EXTENSION_NAME}-hold-toggle">Hold ON</button>
+      <button class="menu_button tavernplug-strict-off-btn" type="button" id="${EXTENSION_NAME}-strict-toggle">Strict OFF</button>
+      <button class="menu_button tavernplug-safe-on-btn" type="button" id="${EXTENSION_NAME}-safe-toggle">Safe ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-park-hold">Park at 0</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>
@@ -1327,23 +1358,14 @@ function renderSettingsPanel() {
     stopPatternMode(false);
     void sendModeTest(testModeStyle, "deep");
   });
-  panel.querySelector(`#${EXTENSION_NAME}-safe-on`)?.addEventListener("click", () => {
-    void toggleSafeMode(true);
+  panel.querySelector(`#${EXTENSION_NAME}-safe-toggle`)?.addEventListener("click", () => {
+    void toggleSafeMode(!settings.safeMode);
   });
-  panel.querySelector(`#${EXTENSION_NAME}-safe-off`)?.addEventListener("click", () => {
-    void toggleSafeMode(false);
+  panel.querySelector(`#${EXTENSION_NAME}-hold-toggle`)?.addEventListener("click", () => {
+    void toggleHoldMode(!settings.holdUntilNextCommand);
   });
-  panel.querySelector(`#${EXTENSION_NAME}-hold-on`)?.addEventListener("click", () => {
-    void toggleHoldMode(true);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-hold-off`)?.addEventListener("click", () => {
-    void toggleHoldMode(false);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-strict-on`)?.addEventListener("click", () => {
-    toggleStrictMode(true);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-strict-off`)?.addEventListener("click", () => {
-    toggleStrictMode(false);
+  panel.querySelector(`#${EXTENSION_NAME}-strict-toggle`)?.addEventListener("click", () => {
+    toggleStrictMode(!settings.strictTagOnly);
   });
   panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
     void handleEmergencyStop();
@@ -1371,6 +1393,8 @@ function renderSettingsPanel() {
   healthEl = panel.querySelector(`#${EXTENSION_NAME}-health`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
   updateModeStateLine();
+  updateHoldButton();
+  updateStrictButton();
   updateSafeButtons();
   applyDebugVisibility();
   updateQuickPauseButton();
