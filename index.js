@@ -5,6 +5,8 @@ const DEFAULTS = {
   controllerMode: "handy-native",
   handyApiBaseUrl: "https://www.handyfeeling.com/api/handy/v2",
   handyNativePositionScale: "percent",
+  handyNativeMinPct: 25,
+  handyNativeMaxPct: 75,
   pollIntervalMs: 2000,
   autoSend: true,
   paused: false,
@@ -80,6 +82,8 @@ normalizePercentSetting("globalStrokeMaxPct");
 normalizePercentSetting("physicalMinPct");
 normalizePercentSetting("physicalMaxPct");
 normalizePercentSetting("endpointSafetyPaddingPct");
+normalizePercentSetting("handyNativeMinPct");
+normalizePercentSetting("handyNativeMaxPct");
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -287,6 +291,8 @@ async function syncConfig() {
     controllerMode: String(settings.controllerMode ?? "buttplug"),
     handyApiBaseUrl: String(settings.handyApiBaseUrl ?? ""),
     handyNativePositionScale: String(settings.handyNativePositionScale ?? "percent"),
+    handyNativeMin: clampPercent(settings.handyNativeMinPct) / 100,
+    handyNativeMax: clampPercent(settings.handyNativeMaxPct) / 100,
     handyConnectionKey: String(settings.handyConnectionKey ?? ""),
     globalStrokeMin: clampPercent(settings.globalStrokeMinPct) / 100,
     globalStrokeMax: clampPercent(settings.globalStrokeMaxPct) / 100,
@@ -416,7 +422,9 @@ function onInputChange(event) {
       "globalStrokeMaxPct",
       "physicalMinPct",
       "physicalMaxPct",
-      "endpointSafetyPaddingPct"
+      "endpointSafetyPaddingPct",
+      "handyNativeMinPct",
+      "handyNativeMaxPct"
     ].includes(name)
   ) {
     settings[name] = clampPercent(settings[name]);
@@ -426,6 +434,18 @@ function onInputChange(event) {
   }
   if (name === "endpointSafetyPaddingPct") {
     settings[name] = Math.max(0, Math.min(20, clampPercent(settings[name])));
+  }
+  if (name === "handyNativeMinPct") {
+    settings[name] = clampPercent(settings[name]);
+    if (Number(settings.handyNativeMinPct) > Number(settings.handyNativeMaxPct)) {
+      settings.handyNativeMaxPct = settings.handyNativeMinPct;
+    }
+  }
+  if (name === "handyNativeMaxPct") {
+    settings[name] = clampPercent(settings[name]);
+    if (Number(settings.handyNativeMaxPct) < Number(settings.handyNativeMinPct)) {
+      settings.handyNativeMinPct = settings.handyNativeMaxPct;
+    }
   }
   if (name === "globalStrokeMinPct" && Number(settings.globalStrokeMinPct) > Number(settings.globalStrokeMaxPct)) {
     settings.globalStrokeMaxPct = settings.globalStrokeMinPct;
@@ -484,7 +504,9 @@ function onInputChange(event) {
     "globalStrokeMaxPct",
     "physicalMinPct",
     "physicalMaxPct",
-    "endpointSafetyPaddingPct"
+    "endpointSafetyPaddingPct",
+    "handyNativeMinPct",
+    "handyNativeMaxPct"
   ].includes(name);
   const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
   if (name === "globalStrokeMinPct" || name === "globalStrokeMaxPct") {
@@ -953,6 +975,14 @@ function renderSettingsPanel() {
         <option value="percent" ${settings.handyNativePositionScale === "percent" ? "selected" : ""}>0..100 (xpt percent)</option>
         <option value="unit" ${settings.handyNativePositionScale === "unit" ? "selected" : ""}>0..1 (normalized)</option>
       </select>
+    </div>
+    <div class="tavernplug-row">
+      <label>Native Position Window (0-100)</label>
+      <div class="tavernplug-inline">
+        <input type="number" step="1" min="0" max="100" name="handyNativeMinPct" value="${settings.handyNativeMinPct}" />
+        <span>to</span>
+        <input type="number" step="1" min="0" max="100" name="handyNativeMaxPct" value="${settings.handyNativeMaxPct}" />
+      </div>
     </div>
     <div class="tavernplug-row">
       <label>Cum Button Style</label>

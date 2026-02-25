@@ -84,6 +84,8 @@ let motionConfig = {
     String(process.env.HANDY_NATIVE_POSITION_SCALE ?? "percent").toLowerCase() === "unit"
       ? "unit"
       : "percent",
+  handyNativeMin: Number(process.env.HANDY_NATIVE_MIN ?? 0.25),
+  handyNativeMax: Number(process.env.HANDY_NATIVE_MAX ?? 0.75),
   strokeRange: Number(process.env.STROKE_RANGE ?? 1),
   globalStrokeMin: Number(process.env.GLOBAL_STROKE_MIN ?? 0),
   globalStrokeMax: Number(process.env.GLOBAL_STROKE_MAX ?? 1),
@@ -146,6 +148,14 @@ function sanitizeMotionConfig(input) {
       input.handyNativePositionScale === undefined
         ? motionConfig.handyNativePositionScale
         : String(input.handyNativePositionScale ?? "").trim().toLowerCase(),
+    handyNativeMin:
+      input.handyNativeMin === undefined
+        ? motionConfig.handyNativeMin
+        : Number(input.handyNativeMin),
+    handyNativeMax:
+      input.handyNativeMax === undefined
+        ? motionConfig.handyNativeMax
+        : Number(input.handyNativeMax),
     strokeRange:
       input.strokeRange === undefined
         ? motionConfig.strokeRange
@@ -240,6 +250,12 @@ function sanitizeMotionConfig(input) {
   if (!["percent", "unit"].includes(next.handyNativePositionScale)) {
     throw new Error("handyNativePositionScale must be 'percent' or 'unit'");
   }
+  if (!Number.isFinite(next.handyNativeMin)) {
+    throw new Error("handyNativeMin must be a number between 0 and 1");
+  }
+  if (!Number.isFinite(next.handyNativeMax)) {
+    throw new Error("handyNativeMax must be a number between 0 and 1");
+  }
 
   next.strokeRange = clamp01(next.strokeRange);
   next.globalStrokeMin = clamp01(next.globalStrokeMin);
@@ -253,6 +269,13 @@ function sanitizeMotionConfig(input) {
   next.safeMaxSpeed = Math.min(0.75, clamp01(next.safeMaxSpeed));
   next.controllerMode = getControllerMode(next.controllerMode);
   next.handyNativePositionScale = next.handyNativePositionScale === "unit" ? "unit" : "percent";
+  next.handyNativeMin = clamp01(next.handyNativeMin);
+  next.handyNativeMax = clamp01(next.handyNativeMax);
+  if (next.handyNativeMax < next.handyNativeMin) {
+    const tmp = next.handyNativeMin;
+    next.handyNativeMin = next.handyNativeMax;
+    next.handyNativeMax = tmp;
+  }
 
   if (next.speedMax < next.speedMin) {
     const tmp = next.speedMin;
@@ -605,6 +628,8 @@ app.post("/config", (req, res) => {
     const previousApiUrl = motionConfig.handyApiBaseUrl;
     const previousConnectionKey = motionConfig.handyConnectionKey;
     const previousScale = motionConfig.handyNativePositionScale;
+    const previousNativeMin = motionConfig.handyNativeMin;
+    const previousNativeMax = motionConfig.handyNativeMax;
     motionConfig = sanitizeMotionConfig(req.body ?? {});
     nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
     strictMotionTagRuntime = motionConfig.strictMotionTag;
@@ -613,6 +638,8 @@ app.post("/config", (req, res) => {
       || previousApiUrl !== motionConfig.handyApiBaseUrl
       || previousConnectionKey !== motionConfig.handyConnectionKey
       || previousScale !== motionConfig.handyNativePositionScale
+      || previousNativeMin !== motionConfig.handyNativeMin
+      || previousNativeMax !== motionConfig.handyNativeMax
     ) {
       ready = false;
     }
@@ -852,6 +879,8 @@ app.post("/preview-motion", (req, res) => {
         controllerMode: motionConfig.controllerMode,
         handyApiBaseUrl: motionConfig.handyApiBaseUrl,
         handyNativePositionScale: motionConfig.handyNativePositionScale,
+        handyNativeMin: motionConfig.handyNativeMin,
+        handyNativeMax: motionConfig.handyNativeMax,
         handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
         speedMin: motionConfig.speedMin,
         speedMax: motionConfig.speedMax,
@@ -899,6 +928,8 @@ app.post("/preview-motion", (req, res) => {
       controllerMode: motionConfig.controllerMode,
       handyApiBaseUrl: motionConfig.handyApiBaseUrl,
       handyNativePositionScale: motionConfig.handyNativePositionScale,
+      handyNativeMin: motionConfig.handyNativeMin,
+      handyNativeMax: motionConfig.handyNativeMax,
       handyConnectionKey: motionConfig.handyConnectionKey ? "[set]" : "",
       speedMin: motionConfig.speedMin,
       speedMax: motionConfig.speedMax,

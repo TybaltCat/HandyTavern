@@ -181,14 +181,19 @@ export class HandyNativeController {
     const safePosition = clamp01(
       Math.max(endpointPad, Math.min(1 - endpointPad, position01))
     );
+    const nativeMin = clamp01(motionConfig.handyNativeMin ?? 0.25);
+    const nativeMax = clamp01(motionConfig.handyNativeMax ?? 0.75);
+    const winMin = Math.min(nativeMin, nativeMax);
+    const winMax = Math.max(nativeMin, nativeMax);
+    const mappedPosition = clamp01(winMin + safePosition * (winMax - winMin));
     const scale = String(motionConfig.handyNativePositionScale ?? "percent").toLowerCase();
     const xpt = scale === "unit"
-      ? Math.round(safePosition * 10000) / 10000 // 0..1
-      : Math.round(safePosition * 10000) / 100; // 0..100
+      ? Math.round(mappedPosition * 10000) / 10000 // 0..1
+      : Math.round(mappedPosition * 10000) / 100; // 0..100
     const t = Math.max(1, Math.round(durationMs));
     // eslint-disable-next-line no-console
     console.log(
-      `[native] xpt=${xpt} scale=${scale} t=${t} pad=${Math.round(endpointPad * 100)}%`
+      `[native] xpt=${xpt} scale=${scale} t=${t} pad=${Math.round(endpointPad * 100)}% nativeWin=${winMin.toFixed(2)}..${winMax.toFixed(2)}`
     );
     // Common payload for HDSP percent+time endpoint.
     await this.request("/hdsp/xpt", key, "PUT", { xpt, t, stopOnTarget: false });
