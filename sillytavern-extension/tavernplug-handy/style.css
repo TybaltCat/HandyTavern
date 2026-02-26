@@ -4,6 +4,14 @@
   padding: 0;
   margin: 10px 0;
   background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.tavernplug-panel.inline-drawer {
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 .tavernplug-header {

@@ -1533,14 +1533,22 @@ function renderSettingsPanel() {
   panel.querySelector(".tavernplug-speed-profiles-toggle")?.addEventListener("click", () => {
     setSpeedProfilesOpen(panel, !settings.speedProfilesOpen);
   });
-  panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
+  const togglePanelCollapsed = () => {
     setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
+  };
+  panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
+    togglePanelCollapsed();
   });
   panel.querySelector(".tavernplug-toggle")?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
+      togglePanelCollapsed();
     }
+  });
+  panel.querySelector(".tavernplug-header")?.addEventListener("click", (event) => {
+    const target = event.target;
+    if (target instanceof Element && target.closest("button,input,select,textarea,label,a")) return;
+    togglePanelCollapsed();
   });
   setAdvancedOpen(panel, settings.advancedOpen);
   setSpeedProfilesOpen(panel, settings.speedProfilesOpen);
