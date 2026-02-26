@@ -443,6 +443,43 @@ async function handleSyncAndTestConnection() {
   }
 }
 
+function handleSetupGuide() {
+  const guide = [
+    "TavernPlug Setup Guide",
+    "",
+    "1) Install TavernPlug bridge (outside SillyTavern):",
+    "   Windows: .\\install.ps1",
+    "   macOS/Linux: chmod +x ./install.sh && ./install.sh",
+    "",
+    "2) Edit .env and set HANDY_CONNECTION_KEY.",
+    "3) Start bridge: npm start",
+    "4) In this extension:",
+    "   - Bridge URL: http://127.0.0.1:8787",
+    "   - Paste Handy Connection Key",
+    "   - Click Sync + Test",
+    "",
+    "Note: extension install alone cannot install/run the local bridge."
+  ].join("\n");
+  window.alert(guide);
+}
+
+async function handleCheckBridge() {
+  try {
+    const health = await fetchHealth();
+    const connected = health?.controller?.connected ? "connected" : "disconnected";
+    const device = health?.controller?.selectedDevice || "none";
+    const mode = health?.controllerMode || settings.controllerMode || "handy-native";
+    const active = health?.motionLikelyActive ? "active" : "idle";
+    setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
+    setSyncButtonConnected(Boolean(health?.controller?.connected));
+    setStatus("Bridge check OK");
+  } catch (error) {
+    setHealth("Bridge: offline");
+    setSyncButtonConnected(false);
+    setStatus(`Bridge check failed: ${error.message}`);
+  }
+}
+
 async function sendMotionIfNeeded(message) {
   if (!settings.autoSend || !message) return;
   if (settings.paused) return;
@@ -1068,6 +1105,10 @@ function renderSettingsPanel() {
         <button class="menu_button tavernplug-sync-btn" type="button" id="${EXTENSION_NAME}-sync-test">Sync + Test</button>
       </div>
     </div>
+    <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-check-bridge">Check Bridge</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-setup-guide">Setup Guide</button>
+    </div>
     <div class="tavernplug-row">
       <label>Endpoint Safety Padding (0-20)</label>
       <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
@@ -1258,6 +1299,12 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-sync-test`)?.addEventListener("click", () => {
     void handleSyncAndTestConnection();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-check-bridge`)?.addEventListener("click", () => {
+    void handleCheckBridge();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-setup-guide`)?.addEventListener("click", () => {
+    handleSetupGuide();
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
     stopPatternMode(false);

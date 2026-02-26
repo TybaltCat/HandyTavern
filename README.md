@@ -16,16 +16,35 @@ Default backend is now Handy Native (Wi-Fi). Buttplug/Intiface remains available
 
 ## Quick start
 
-1. Install dependencies:
-   - `npm install`
-2. Create env:
-   - `Copy-Item .env.example .env`
-3. Start API in simulation mode:
+Windows (PowerShell):
+
+1. Run installer helper:
+   - `.\install.ps1`
+2. Edit `.env` and set your `HANDY_CONNECTION_KEY`.
+3. Start bridge:
    - `npm start`
-4. Test parsing:
-   - `Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/motion -ContentType 'application/json' -Body '{"text":"[motion: style=rough speed=80 depth=deep duration=8s]"}'`
+
+macOS/Linux:
+
+1. Make script executable once:
+   - `chmod +x ./install.sh`
+2. Run installer helper:
+   - `./install.sh`
+3. Edit `.env` and set your `HANDY_CONNECTION_KEY`.
+4. Start bridge:
+   - `npm start`
+
+Optional parse test:
+
+- `Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8787/motion -ContentType 'application/json' -Body '{"text":"[motion: style=rough speed=80 depth=deep duration=8s]"}'`
 
 You should get a JSON response with parsed motion.
+
+## One-step setup scripts
+
+- `install.ps1` installs dependencies and creates `.env` from `.env.example` (if missing).
+- `install.sh` does the same for macOS/Linux.
+- Use `-ForceEnv` (PowerShell) or `--force-env` (bash) to overwrite `.env` from template.
 
 ## Device mode (default: Handy Native)
 
@@ -44,7 +63,7 @@ Optional fallback mode (Buttplug):
    - `BUTTPLUG_WS_URL=ws://127.0.0.1:12345`
 3. Restart this service.
 
-## SillyTavern integration idea
+## SillyTavern integration
 
 This repo now includes extension files at the repository root:
 
@@ -57,6 +76,8 @@ Install by copying those files into a single folder in your SillyTavern third-pa
 - `<SillyTavern>/public/scripts/extensions/third-party/tavernplug-handy`
 
 Then reload SillyTavern and open Extensions settings.
+
+Important: installing the extension alone is not enough. Users must also run this TavernPlug bridge locally (`npm start`) so the extension can call `http://127.0.0.1:8787`.
 
 The extension UI lets you set:
 
