@@ -22,6 +22,12 @@ function depthToNormalizedStroke(depth) {
   return 1.0;
 }
 
+function getMotionStrokeOverride01(motion = {}) {
+  const raw = Number(motion?.cumStrokePct);
+  if (!Number.isFinite(raw)) return null;
+  return clamp01(raw / 100);
+}
+
 function getGlobalStrokeWindow(motionConfig) {
   const pad = Math.max(0, Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03)));
   const rawMin = clamp01(motionConfig.globalStrokeMin ?? 0);
@@ -51,18 +57,29 @@ function applyPhysicalStrokeWindow(value, motionConfig) {
   return clamp01(min + normalized * (max - min));
 }
 
-function computeStrokePosition(depth, motionConfig) {
+function computeStrokePosition(depth, motionConfig, motion = {}) {
+  const override01 = getMotionStrokeOverride01(motion);
+  if (override01 !== null) {
+    return applyGlobalStrokeWindow(override01, motionConfig);
+  }
   const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
   const strokeRange = clamp01(motionConfig.strokeRange ?? 1);
   const local = clamp01(minStroke + depthToNormalizedStroke(depth) * strokeRange);
   return applyGlobalStrokeWindow(local, motionConfig);
 }
 
-function computeMappedStrokeWindow(depth, motionConfig) {
-  const strokePosition = computeStrokePosition(depth, motionConfig);
-  const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
-  let logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
-  if (depth === "tip") {
+function computeMappedStrokeWindow(depth, motionConfig, motion = {}) {
+  const override01 = getMotionStrokeOverride01(motion);
+  const strokePosition = computeStrokePosition(depth, motionConfig, motion);
+  let logicalMinStroke;
+  if (override01 !== null) {
+    const { min } = getGlobalStrokeWindow(motionConfig);
+    logicalMinStroke = min;
+  } else {
+    const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
+    logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
+  }
+  if (override01 === null && depth === "tip") {
     // Keep tip strokes away from the physical base by lifting the floor.
     const tipFloor = applyGlobalStrokeWindow(0.12, motionConfig);
     logicalMinStroke = Math.max(logicalMinStroke, tipFloor);
@@ -560,7 +577,7 @@ export class HandyNativeController {
       Math.min(remapped, safeCap) / Math.max(0.001, safeCap)
     );
 
-    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig, motion);
     const baseHalfCycleMs = Math.max(
       20,
       Math.round(700 * Math.pow(0.05, remappedNormalizedSpeed))
@@ -610,7 +627,7 @@ export class HandyNativeController {
     if (this.hampSlideUnsupported) return;
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
     const trace = Boolean(motionConfig.handyNativeTrace);
-    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig, motion);
     const minPct = Math.round(minStroke * 1000) / 10;
     const maxPct = Math.round(maxStroke * 1000) / 10;
     // eslint-disable-next-line no-console
@@ -630,7 +647,7 @@ export class HandyNativeController {
   async applySlideWindowWithHdspFallback(motion, motionConfig = {}, runtimeProtocol = "hamp") {
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
     const trace = Boolean(motionConfig.handyNativeTrace);
-    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig, motion);
     const minPct = Math.round(minStroke * 1000) / 10;
     const maxPct = Math.round(maxStroke * 1000) / 10;
     const signature = `${runtimeProtocol}:${minPct}:${maxPct}`;
@@ -713,7 +730,7 @@ export class HandyNativeController {
     const speedPct = Math.max(1, Math.min(100, Math.round(capped * 100)));
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
     const trace = Boolean(motionConfig.handyNativeTrace);
-    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig, motion);
     const minPct = Math.round(minStroke * 1000) / 10;
     const maxPct = Math.round(maxStroke * 1000) / 10;
     const backend = getNativeBackend(motionConfig);
@@ -877,7 +894,7 @@ export class HandyNativeController {
     if (isCancelled()) return;
 
     // Prefer v3 HSP playback with embedded points (FW4 remote control path).
-    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig);
+    const { minStroke, maxStroke } = computeMappedStrokeWindow(motion.depth, motionConfig, motion);
     const minPct = Math.round(minStroke * 1000) / 10;
     const maxPct = Math.round(maxStroke * 1000) / 10;
     const baseHalfCycleMs = Math.max(24, Math.round(720 * Math.pow(0.06, capped)));

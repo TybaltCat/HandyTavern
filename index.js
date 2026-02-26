@@ -23,9 +23,10 @@ const DEFAULTS = {
   panelCollapsed: false,
   safeMode: true,
   safeMaxSpeed: 75,
-  patternIntervalMs: 1800,
+  patternIntervalMs: 700,
   cumStyle: "intense",
   cumDepth: "deep",
+  cumStrokePct: 90,
   cumSpeedPct: 75,
   cumDurationMs: 6000,
   testSpeedGentlePct: 20,
@@ -43,7 +44,7 @@ const DEFAULTS = {
   speedMin: 0,
   speedMax: 75,
   minimumAllowedStroke: 0,
-  endpointSafetyPaddingPct: 3
+  endpointSafetyPaddingPct: 5
 };
 const LOCKED_TECHNICAL_DEFAULTS = {
   invertStroke: false,
@@ -101,6 +102,16 @@ if (Number(settings.testSpeedBriskPct) === 40 && Number(settings.testSpeedNormal
 if (Number(settings.testSpeedHardPct) >= Number(settings.testSpeedIntensePct)) {
   settings.testSpeedIntensePct = Math.min(100, Number(settings.testSpeedHardPct) + 15);
 }
+if (settings.cumStrokePct === undefined || settings.cumStrokePct === null || settings.cumStrokePct === "") {
+  const depth = String(settings.cumDepth ?? "").toLowerCase();
+  const migrated = {
+    tip: 20,
+    middle: 45,
+    full: 70,
+    deep: 90
+  };
+  settings.cumStrokePct = migrated[depth] ?? 90;
+}
 normalizePercentSetting("strokeRange");
 normalizePercentSetting("speedMin");
 normalizePercentSetting("speedMax");
@@ -111,6 +122,7 @@ normalizePercentSetting("testSpeedBriskPct");
 normalizePercentSetting("testSpeedNormalPct");
 normalizePercentSetting("testSpeedHardPct");
 normalizePercentSetting("testSpeedIntensePct");
+normalizePercentSetting("cumStrokePct");
 normalizePercentSetting("cumSpeedPct");
 normalizePercentSetting("globalStrokeMinPct");
 normalizePercentSetting("globalStrokeMaxPct");
@@ -142,6 +154,9 @@ let quickStopRetryHandle = null;
 let lastObservedMessageId = -1;
 let lastObservedMessageText = "";
 let lastObservedMessageChangedAt = 0;
+let lastNonCumMotionPayload = null;
+let cumOverrideActive = false;
+let cumRestorePayload = null;
 
 const MESSAGE_STABILIZE_MS = 1200;
 
@@ -166,6 +181,21 @@ function setStatus(message) {
 
 function setHealth(message) {
   if (healthEl) healthEl.textContent = message;
+}
+
+function cloneMotionPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const text = String(payload.text ?? "").trim();
+  if (!text) return null;
+  return { text };
+}
+
+function markNonCumMotionPayload(payload) {
+  const normalized = cloneMotionPayload(payload);
+  if (!normalized) return;
+  lastNonCumMotionPayload = normalized;
+  cumOverrideActive = false;
+  cumRestorePayload = null;
 }
 
 function setSyncButtonConnected(connected) {
@@ -287,6 +317,23 @@ function updateGlobalSpeedSlider(panel) {
     track.style.setProperty("--range-min", `${min}%`);
     track.style.setProperty("--range-max", `${max}%`);
   }
+}
+
+function cumDepthFromStrokePct(raw) {
+  const pct = clampPercent(raw);
+  if (pct < 25) return "tip";
+  if (pct < 50) return "middle";
+  if (pct < 75) return "full";
+  return "deep";
+}
+
+function updateCumStrokeValue(panel) {
+  if (!panel) return;
+  const input = panel.querySelector(`input[name="cumStrokePct"]`);
+  const valueEl = panel.querySelector(".tavernplug-cum-stroke-value");
+  const pct = clampPercent(settings.cumStrokePct);
+  if (input) input.value = String(pct);
+  if (valueEl) valueEl.textContent = `${pct}% (${cumDepthFromStrokePct(pct)})`;
 }
 
 function setAdvancedOpen(panel, open) {
@@ -447,18 +494,37 @@ function handleSetupGuide() {
   const guide = [
     "TavernPlug Setup Guide",
     "",
-    "1) Install TavernPlug bridge (outside SillyTavern):",
+    "Pick a folder first (NOT inside SillyTavern):",
+    "Windows example: C:\\TavernPlug",
+    "macOS/Linux example: ~/TavernPlug",
+    "",
+    "1) Clone TavernPlug into that folder:",
+    "   Windows (PowerShell):",
+    "   git clone https://github.com/TybaltCat/HandyTavern C:\\TavernPlug",
+    "   cd C:\\TavernPlug",
+    "   macOS/Linux (Terminal):",
+    "   git clone https://github.com/TybaltCat/HandyTavern ~/TavernPlug",
+    "   cd ~/TavernPlug",
+    "",
+    "2) Run installer helper in that folder:",
     "   Windows: .\\install.ps1",
     "   macOS/Linux: chmod +x ./install.sh && ./install.sh",
     "",
-    "2) Edit .env and set HANDY_CONNECTION_KEY.",
-    "3) Start bridge: npm start",
-    "4) In this extension:",
+    "3) Edit .env in that same folder and set HANDY_CONNECTION_KEY.",
+    "4) Start bridge from that same folder: npm start",
+    "   Leave this terminal window open while using SillyTavern.",
+    "",
+    "5) In this extension:",
     "   - Bridge URL: http://127.0.0.1:8787",
     "   - Paste Handy Connection Key",
     "   - Click Sync + Test",
     "",
-    "Note: extension install alone cannot install/run the local bridge."
+    "If Sync + Test fails:",
+    "   - Make sure you are in the TavernPlug folder",
+    "   - Make sure npm start is still running",
+    "   - Click Check Bridge",
+    "",
+    "Important: extension install alone cannot install/run the local bridge."
   ].join("\n");
   window.alert(guide);
 }
@@ -507,9 +573,11 @@ async function sendMotionIfNeeded(message) {
   if (settings.strictTagOnly && !messageHasMotionTag(message.text)) return;
 
   try {
-    await postJson("/motion", { text: message.text });
+    const payload = { text: message.text };
+    await postJson("/motion", payload);
     lastSentMessageId = message.id;
     lastSentMessageSignature = signature;
+    markNonCumMotionPayload(payload);
     setStatus(`Sent message ${message.id}`);
   } catch (error) {
     setStatus(`Motion error: ${error.message}`);
@@ -647,7 +715,10 @@ function onInputChange(event) {
     }
   }
   if (type === "number" && name === "patternIntervalMs") {
-    settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 1800));
+    settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 700));
+  }
+  if (name === "cumStrokePct") {
+    settings[name] = clampPercent(settings[name]);
   }
   if (type === "number" && name === "cumDurationMs") {
     const seconds = Number(settings[name]);
@@ -683,6 +754,9 @@ function onInputChange(event) {
   if (name === "speedMin" || name === "speedMax") {
     updateGlobalSpeedSlider(panel);
   }
+  if (name === "cumStrokePct") {
+    updateCumStrokeValue(panel);
+  }
   saveSettings();
   // Any UI setting change is pushed to the local bridge immediately.
   void syncConfig();
@@ -717,6 +791,8 @@ async function handleEmergencyStop() {
   try {
     stopPatternMode(false);
     await postJson("/emergency-stop", {});
+    cumOverrideActive = false;
+    cumRestorePayload = null;
     setStatus("Emergency stop sent");
   } catch (error) {
     setStatus(`Stop error: ${error.message}`);
@@ -744,6 +820,8 @@ async function togglePause() {
     try {
       stopPatternMode(false);
       await postJson("/emergency-stop", {});
+      cumOverrideActive = false;
+      cumRestorePayload = null;
       setStatus("Paused: motion stopped");
     } catch (error) {
       setStatus(`Pause error: ${error.message}`);
@@ -753,7 +831,9 @@ async function togglePause() {
   try {
     const resumeSpeed = currentStyleSpeed("normal");
     const resumeTag = `[motion: style=normal speed=${resumeSpeed} depth=middle duration=3s]`;
-    await postJson("/motion", { text: resumeTag });
+    const payload = { text: resumeTag };
+    await postJson("/motion", payload);
+    markNonCumMotionPayload(payload);
     setStatus(`Resumed: normal/middle @ ${resumeSpeed}`);
   } catch (error) {
     setStatus(`Resume error: ${error.message}`);
@@ -768,6 +848,8 @@ async function handleParkHold() {
   try {
     stopPatternMode(false);
     await postJson("/park-hold", {});
+    cumOverrideActive = false;
+    cumRestorePayload = null;
     setStatus("Parked at 0 until next command");
   } catch (error) {
     setStatus(`Park error: ${error.message}`);
@@ -780,28 +862,42 @@ function clampCumStyle(raw) {
   return allowed.includes(value) ? value : "intense";
 }
 
-function clampCumDepth(raw) {
-  const value = String(raw ?? "").toLowerCase();
-  const allowed = ["tip", "middle", "full", "deep"];
-  return allowed.includes(value) ? value : "deep";
-}
-
 async function handleCumAction() {
   if (settings.paused) {
     setStatus("Paused: cum action blocked");
     return;
   }
+  if (cumOverrideActive) {
+    const restore = cloneMotionPayload(cumRestorePayload)
+      || cloneMotionPayload(lastNonCumMotionPayload)
+      || { text: `[motion: style=normal speed=${currentStyleSpeed("normal")} depth=middle duration=3s]` };
+    try {
+      stopPatternMode(false);
+      await postJson("/motion", restore);
+      markNonCumMotionPayload(restore);
+      setStatus("Cum toggle: restored previous motion");
+    } catch (error) {
+      setStatus(`Cum restore error: ${error.message}`);
+    }
+    return;
+  }
+
   const style = clampCumStyle(settings.cumStyle);
-  const depth = clampCumDepth(settings.cumDepth);
+  const cumStrokePct = clampPercent(settings.cumStrokePct);
+  const depth = cumDepthFromStrokePct(cumStrokePct);
   const speed = clampPercent(settings.cumSpeedPct);
   const durationMs = Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000));
   const durationSec = (durationMs / 1000).toFixed(2).replace(/\.00$/, "");
   const tag = `[motion: style=${style} speed=${speed} depth=${depth} duration=${durationSec}s]`;
   try {
     stopPatternMode(false);
-    await postJson("/motion", { text: tag });
-    setStatus(`Cum action sent: ${style}/${depth} @ ${speed}%`);
+    cumRestorePayload = cloneMotionPayload(lastNonCumMotionPayload);
+    await postJson("/motion", { text: tag, cumStrokePct });
+    cumOverrideActive = true;
+    setStatus(`Cum action sent: ${style}/${depth} (${cumStrokePct}%) @ ${speed}%`);
   } catch (error) {
+    cumOverrideActive = false;
+    cumRestorePayload = null;
     setStatus(`Cum action error: ${error.message}`);
   }
 }
@@ -951,7 +1047,7 @@ async function startPatternMode(name) {
   await tick();
   const intervalMs = Math.max(
     300,
-    Math.min(15000, Number(settings.patternIntervalMs) || 1800)
+    Math.min(15000, Number(settings.patternIntervalMs) || 700)
   );
   patternIntervalHandle = setInterval(() => {
     patternStep += 1;
@@ -1032,7 +1128,9 @@ async function sendModeTest(style, depth) {
   const speed = currentStyleSpeed(style);
   const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=3s]`;
   try {
-    await postJson("/motion", { text: testTag });
+    const payload = { text: testTag };
+    await postJson("/motion", payload);
+    markNonCumMotionPayload(payload);
     setStatus(`Mode test sent: ${style}/${depth} @ ${speed}`);
   } catch (error) {
     setStatus(`Mode test error: ${error.message}`);
@@ -1076,8 +1174,14 @@ function toggleStrictMode(enabled) {
 function setPanelCollapsed(panel, collapsed) {
   settings.panelCollapsed = Boolean(collapsed);
   panel.classList.toggle("tavernplug-collapsed", settings.panelCollapsed);
+  panel.classList.toggle("open", !settings.panelCollapsed);
   const toggle = panel.querySelector(".tavernplug-toggle");
-  if (toggle) toggle.textContent = settings.panelCollapsed ? "+" : "-";
+  if (toggle) {
+    toggle.classList.toggle("fa-circle-chevron-right", settings.panelCollapsed);
+    toggle.classList.toggle("fa-circle-chevron-down", !settings.panelCollapsed);
+    toggle.classList.toggle("down", !settings.panelCollapsed);
+    toggle.setAttribute("aria-expanded", settings.panelCollapsed ? "false" : "true");
+  }
   saveSettings();
 }
 
@@ -1087,13 +1191,16 @@ function renderSettingsPanel() {
 
   const panel = document.createElement("div");
   panel.id = `${EXTENSION_NAME}-panel`;
-  panel.className = "tavernplug-panel";
+  panel.className = "tavernplug-panel inline-drawer";
   panel.innerHTML = `
-    <div class="tavernplug-header">
-      <h4>HandyTavern</h4>
-      <button class="menu_button tavernplug-toggle" type="button">-</button>
+    <div class="tavernplug-header inline-drawer-header">
+      <div class="tavernplug-header-title"><i class="fa-solid fa-hand tavernplug-header-icon" aria-hidden="true"></i> HandyTavern</div>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down tavernplug-toggle" role="button" tabindex="0" aria-label="Toggle HandyTavern settings" aria-expanded="true"></div>
     </div>
-    <div class="tavernplug-body">
+    <div class="tavernplug-body inline-drawer-content">
+    <div class="tavernplug-actions">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-setup-guide">Setup Guide</button>
+    </div>
     <div class="tavernplug-row">
       <label>Bridge URL</label>
       <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
@@ -1107,11 +1214,6 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-check-bridge">Check Bridge</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-setup-guide">Setup Guide</button>
-    </div>
-    <div class="tavernplug-row">
-      <label>Endpoint Safety Padding (0-20)</label>
-      <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
     </div>
     <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
@@ -1129,15 +1231,15 @@ function renderSettingsPanel() {
       </div>
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
-    <div class="tavernplug-row">
-      <label>Pattern Interval (ms)</label>
-      <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
-    </div>
     <div class="tavernplug-actions">
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
       <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
     </div>
     <div class="tavernplug-speed-profiles-body" style="display:none;">
+      <div class="tavernplug-row">
+        <label>Pattern Interval (ms)</label>
+        <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
+      </div>
       <div class="tavernplug-row">
         <label>Gentle Speed %</label>
         <div class="tavernplug-inline">
@@ -1178,6 +1280,32 @@ function renderSettingsPanel() {
           <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-intense-up">+10</button>
         </div>
       </div>
+      <div class="tavernplug-row">
+        <label>Cum Button</label>
+      </div>
+      <div class="tavernplug-row">
+        <label>Cum Button Style</label>
+        <select name="cumStyle">
+          <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
+          <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
+          <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
+          <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
+          <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
+        </select>
+      </div>
+      <div class="tavernplug-row">
+        <label>Cum Stroke Length (0-100)</label>
+        <input type="range" step="1" min="0" max="100" name="cumStrokePct" value="${clampPercent(settings.cumStrokePct)}" />
+        <div class="tavernplug-global-range-value tavernplug-cum-stroke-value">${clampPercent(settings.cumStrokePct)}% (${cumDepthFromStrokePct(settings.cumStrokePct)})</div>
+      </div>
+      <div class="tavernplug-row">
+        <label>Cum Button Speed (0-100)</label>
+        <input type="number" step="1" min="0" max="100" name="cumSpeedPct" value="${settings.cumSpeedPct}" />
+      </div>
+      <div class="tavernplug-row">
+        <label>Cum Button Duration (seconds)</label>
+        <input type="number" step="0.25" min="0.25" max="120" name="cumDurationMs" value="${(Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000)) / 1000).toFixed(2).replace(/\.?0+$/, "")}" />
+      </div>
     </div>
     <div class="tavernplug-advanced-body" style="display:none;">
     <div class="tavernplug-row">
@@ -1189,38 +1317,15 @@ function renderSettingsPanel() {
       <div>Locked defaults: Invert Stroke OFF, Native Scale = percent, Command = xpt, Trace OFF, Native Window = 25..75</div>
     </div>
     <div class="tavernplug-row">
+      <label title="Safety buffer from stroke endpoints. Higher = safer but shorter usable range.">Endpoint Safety Padding (0-20)</label>
+      <input type="number" step="1" min="0" max="20" name="endpointSafetyPaddingPct" value="${settings.endpointSafetyPaddingPct}" />
+    </div>
+    <div class="tavernplug-row">
       <label>Native Backend</label>
       <select name="handyNativeBackend" class="tavernplug-native-select">
         <option value="thehandy" ${settings.handyNativeBackend === "thehandy" ? "selected" : ""}>thehandy wrapper (Recommended)</option>
         <option value="builtin" ${settings.handyNativeBackend === "builtin" ? "selected" : ""}>Built-in HTTP calls</option>
       </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Style</label>
-      <select name="cumStyle">
-        <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
-        <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
-        <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
-        <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
-        <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
-      </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Depth</label>
-      <select name="cumDepth">
-        <option value="tip" ${settings.cumDepth === "tip" ? "selected" : ""}>Tip</option>
-        <option value="middle" ${settings.cumDepth === "middle" ? "selected" : ""}>Middle</option>
-        <option value="full" ${settings.cumDepth === "full" ? "selected" : ""}>Full</option>
-        <option value="deep" ${settings.cumDepth === "deep" ? "selected" : ""}>Deep</option>
-      </select>
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Speed (0-100)</label>
-      <input type="number" step="1" min="0" max="100" name="cumSpeedPct" value="${settings.cumSpeedPct}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Cum Button Duration (seconds)</label>
-      <input type="number" step="0.25" min="0.25" max="120" name="cumDurationMs" value="${(Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000)) / 1000).toFixed(2).replace(/\.?0+$/, "")}" />
     </div>
     <div class="tavernplug-row">
       <label>Message Check Interval (ms)</label>
@@ -1232,20 +1337,22 @@ function renderSettingsPanel() {
         Show debug status lines
       </label>
     </div>
-    </div>
     <div class="tavernplug-row">
-      <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
-      <label>
-        <input type="checkbox" name="autoSend" ${settings.autoSend ? "checked" : ""} />
-        Auto-send latest assistant messages
-      </label>
-      <label>
-        <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
-        Stop previous motion when a new message is sent
-      </label>
       <label>
         <input type="checkbox" name="holdUntilNextCommand" ${settings.holdUntilNextCommand ? "checked" : ""} />
         Hold motion until next command
+      </label>
+    </div>
+    </div>
+    <div class="tavernplug-row">
+      <!-- Add additional UI inputs here and mirror them in DEFAULTS + syncConfig(). -->
+      <label title="On: LLM messages sent to Handy automatically. Off: No auto-send. Buttons/Tags/Tests only.">
+        <input type="checkbox" name="autoSend" ${settings.autoSend ? "checked" : ""} />
+        Auto-send latest assistant messages
+      </label>
+      <label title="ON: cleaner command handoff, may feel slightly cut. OFF: smoother blending, but less predictable overlap.">
+        <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
+        Stop previous motion when a new message is sent
       </label>
     </div>
     <div class="tavernplug-actions">
@@ -1429,11 +1536,18 @@ function renderSettingsPanel() {
   panel.querySelector(".tavernplug-toggle")?.addEventListener("click", () => {
     setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
   });
+  panel.querySelector(".tavernplug-toggle")?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setPanelCollapsed(panel, !panel.classList.contains("tavernplug-collapsed"));
+    }
+  });
   setAdvancedOpen(panel, settings.advancedOpen);
   setSpeedProfilesOpen(panel, settings.speedProfilesOpen);
   setPanelCollapsed(panel, settings.panelCollapsed);
   updateGlobalStrokeSlider(panel);
   updateGlobalSpeedSlider(panel);
+  updateCumStrokeValue(panel);
 
   container.append(panel);
   modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);

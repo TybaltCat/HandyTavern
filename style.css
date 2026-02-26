@@ -1,31 +1,37 @@
 .tavernplug-panel {
-  border: 1px solid var(--SmartThemeBorderColor);
-  border-radius: 10px;
-  padding: 12px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
   margin: 10px 0;
-  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 80%, transparent);
-}
-
-.tavernplug-panel h4 {
-  margin: 0 0 10px;
+  background: transparent;
 }
 
 .tavernplug-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 0;
 }
 
-.tavernplug-header h4 {
+.tavernplug-header-title {
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tavernplug-header-icon {
+  color: #fff;
+  font-size: 0.95em;
+  line-height: 1;
 }
 
 .tavernplug-toggle {
-  width: 28px;
-  min-width: 28px;
-  padding: 0;
-  line-height: 26px;
+  cursor: pointer;
+}
+
+.tavernplug-body {
+  padding-top: 10px;
 }
 
 .tavernplug-collapsed .tavernplug-body {

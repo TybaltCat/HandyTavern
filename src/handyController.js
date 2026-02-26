@@ -54,6 +54,12 @@ function depthToNormalizedStroke(depth) {
   return 1.0;
 }
 
+function getMotionStrokeOverride01(motion = {}) {
+  const raw = Number(motion?.cumStrokePct);
+  if (!Number.isFinite(raw)) return null;
+  return clamp01(raw / 100);
+}
+
 function remapSpeed(speed, speedMin, speedMax) {
   const min = clamp01(speedMin);
   const max = clamp01(speedMax);
@@ -61,7 +67,11 @@ function remapSpeed(speed, speedMin, speedMax) {
   return clamp01(min + speed * (max - min));
 }
 
-function computeStrokePosition(depth, motionConfig) {
+function computeStrokePosition(depth, motionConfig, motion = {}) {
+  const override01 = getMotionStrokeOverride01(motion);
+  if (override01 !== null) {
+    return applyGlobalStrokeWindow(override01, motionConfig);
+  }
   const minStroke = clamp01(motionConfig.minimumAllowedStroke ?? 0);
   const strokeRange = clamp01(motionConfig.strokeRange ?? 1);
   const local = clamp01(minStroke + depthToNormalizedStroke(depth) * strokeRange);
@@ -447,9 +457,11 @@ export class HandyController {
     );
     const scalar = clamp01(remapped * depthMultiplier);
     // User-tunable stroke limits are applied inside computeStrokePosition().
-    const strokePosition = computeStrokePosition(motion.depth, motionConfig);
-    const localMin = clamp01(motionConfig.minimumAllowedStroke ?? 0);
-    const logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
+    const override01 = getMotionStrokeOverride01(motion);
+    const strokePosition = computeStrokePosition(motion.depth, motionConfig, motion);
+    const logicalMinStroke = override01 !== null
+      ? getGlobalStrokeWindow(motionConfig).min
+      : applyGlobalStrokeWindow(clamp01(motionConfig.minimumAllowedStroke ?? 0), motionConfig);
     const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
     const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
     const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);

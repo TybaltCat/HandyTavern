@@ -893,6 +893,14 @@ app.post("/motion", async (req, res) => {
     });
   }
 
+  // Optional one-off stroke override for Cum action (0..100 from extension slider).
+  const rawCumStrokePct = Number(req.body?.cumStrokePct);
+  if (Number.isFinite(rawCumStrokePct)) {
+    motion.cumStrokePct = Math.max(0, Math.min(100, rawCumStrokePct));
+    // eslint-disable-next-line no-console
+    console.log(`[motion] cumStrokePct override=${motion.cumStrokePct.toFixed(1)}%`);
+  }
+
   try {
     await ensureReady();
     stopPatternRunner();
