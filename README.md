@@ -2,30 +2,32 @@
 
 TavernPlug converts SillyTavern text output to motion input for your Handy device.
 
-## 30-Second Checklist (Skim This First)
-
-1. Install Node.js + Git.
-2. Clone this repo to a folder like `C:\TavernPlug`.
-3. Run `.\launch-windows.ps1`.
-4. Keep the bridge window open (`npm start` window must stay open and running).
-5. In SillyTavern, open HandyTavern extension:
-   - Input Handy connection key
-   - Bridge URL = `http://127.0.0.1:8787`
-   - click `Connect Device`
-   - click `Check Bridge`
-6. If setup says `Ready`, you are done.
-
-If it says offline, the bridge is not running.
-
-This project requires **2 parts**:
+##This project requires **3 parts**:
 
 1. A SillyTavern extension (UI panel in SillyTavern)
 2. A local bridge app (runs on your computer with `npm start`)
+3. An addition to your SillyTavern system prompt
 
 Important:
 
 - Installing the extension by Git URL in SillyTavern is **not enough by itself**.
 - You must also run the local bridge app.
+
+
+## 30-Second Checklist (For Powerusers)
+
+1. Install Node.js + Git.
+2. Clone this repo to a folder like `C:\TavernPlug`.
+3. Run `.\launch-windows.ps1`.
+4. Keep the bridge window open (`npm start` window must stay open AND running).
+5. In SillyTavern, open HandyTavern extension:
+   - Input Handy connection key
+   - Bridge URL = `http://127.0.0.1:8787`
+   - click `Connect Device`
+   - click `Check Bridge`
+6. If setup says `Ready`, you're done time to let that LLM jerk your gherkin
+
+If it says offline, the bridge is not running.
 
 ## Before You Start
 
@@ -139,75 +141,6 @@ npm start
 3. Copy `manifest.json`, `index.js`, and `style.css` into your SillyTavern third-party extension folder.
 4. Refresh SillyTavern and connect from the extension panel.
 
-## Handy Connection Key: Where To Set It
-
-Recommended:
-
-- Set key in extension UI (HandyTavern panel)
-
-Optional:
-
-- Set `HANDY_CONNECTION_KEY` in `.env` as a startup default
-
-How it behaves:
-
-- bridge reads `.env` on startup
-- extension can update key via `/config`
-- latest runtime config is persisted to `tavernplug.config.json`
-
-## Advanced Settings Explained (Plain English)
-
-These are the settings most people ask about once basic setup is working.
-
-### Global Stroke Window
-
-- This is your main allowed stroke zone (minimum to maximum).
-- Example: `20% to 75%` means all motion is constrained to that part of travel.
-- Pattern-specific slide windows are mapped **inside** this global window.
-
-### Global Speed Window
-
-- This sets your allowed speed range for all motions.
-- Even if a prompt asks for high speed, speed is remapped into this window.
-
-### Safe Mode
-
-- Keeps motion from getting too aggressive.
-- Caps speed and applies safety limits.
-- Recommended to keep ON unless you know exactly why you need it OFF.
-
-### Hold Motion Until Next Command
-
-- ON: current motion keeps running until a new command arrives.
-- OFF: motion can stop naturally after its duration.
-
-### Stop Previous Motion When New Message Is Sent
-
-- ON: new motion cuts over cleanly (less overlap, more predictable).
-- OFF: transitions may blend more but can feel less consistent.
-
-### Pattern Cycle Length (ms)
-
-- Controls how long one full pattern loop takes.
-- Higher value = slower, more spread-out pattern.
-- Lower value = faster pattern loop.
-
-### Pattern Notes
-
-- `wave` and `ramp` are intentionally stretched longer than base cycle for smoother progression.
-- Pattern step timing has slight jitter to avoid robotic perfect timing.
-
-### Strict Tags
-
-- ON: extension only acts on valid `[motion: ...]` tags.
-- OFF: extension may infer motion from plain prose.
-- If you want predictable behavior, keep this ON.
-
-### Park at 0
-
-- Sends a park/hold action to base position.
-- This works even if the extension is currently paused.
-
 ## Prompt / System Prompt Setup (Important)
 
 If you want consistent motion behavior, you should add a system/prompt rule so the LLM always outputs motion tags.
@@ -248,7 +181,53 @@ Practical recommendation:
 - Keep `Strict Tags` ON in extension settings.
 - Use prompt instructions like above so the model reliably emits tags.
 
-## If Something Is Not Working
+
+## Advanced Settings Explained (Plain English)
+
+### Global Stroke Window
+
+- This is your main allowed stroke zone (minimum to maximum).
+- Example: `20% to 75%` means all motion is constrained to that part of travel.
+- Pattern-specific slide windows are mapped **inside** this global window.
+
+### Global Speed Window
+
+- This sets your allowed speed range for all motions.
+- Even if a prompt asks for higher speed, speed is remapped into this window.
+
+### Safe Mode
+
+- Caps speed and applies safety limits.
+- Turn it off at your own peril.
+
+### Hold Motion Until Next Command
+
+- ON: current motion keeps running until a new command arrives.
+- OFF: motion can stop naturally after its duration.
+
+### Stop Previous Motion When New Message Is Sent
+
+- ON: new motion cuts over cleanly (less overlap, more predictable).
+- OFF: transitions may blend more but can feel less consistent.
+
+### Pattern Cycle Length (ms)
+
+- Controls how long one full pattern loop takes.
+- Higher value = slower, more spread-out pattern.
+- Lower value = faster pattern loop.
+
+### Strict Tags
+
+- ON: extension only acts on valid `[motion: ...]` tags.
+- OFF: extension may infer motion from plain prose.
+- If you want predictable behavior, keep this ON.
+
+### Park at 0
+
+- Sends a park/hold action to bring Handy to base position.
+
+
+## Troubleshooting - If Something Is Not Working
 
 ### "Bridge offline"
 
