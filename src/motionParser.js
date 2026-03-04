@@ -484,13 +484,14 @@ function parseRelaxedMotion(text) {
     speed = clamp01(speed + Math.min(0.15, context.total * 0.05));
   }
 
-  speed = clamp01(speed + computeAnatomicalBoost(text));
-
   if (hasFasterDeeperPhrase(text)) {
     speed = clamp01(speed + 0.1);
     if (!VALID_DEPTHS.has(explicitDepth)) {
       depth = "deep";
     }
+  }
+  if (!hasExplicitSpeed) {
+    speed = Math.min(speed, 0.65);
   }
 
   return {
@@ -505,6 +506,9 @@ function parseRelaxedMotion(text) {
 
 export function parseMotion(text, options = {}) {
   const strictTag = options.strictTag ?? true;
+  if (/\[motion:\s*[^\]]+\]/i.test(String(text ?? ""))) {
+    return parseTaggedMotion(String(text ?? ""));
+  }
   if (strictTag) return parseTaggedMotion(text);
 
   return parseRelaxedMotion(text);
@@ -527,7 +531,6 @@ export function hasMotionIntent(text, options = {}) {
   const hasTierOrBoost =
     detectIntensityTier(source) !== "none"
     || detectContextBoost(source).total > 0
-    || computeAnatomicalBoost(source) > 0
     || hasFasterDeeperPhrase(source);
   const hasPatternSignal = parseRelaxedPatternTrigger(source) !== null;
 

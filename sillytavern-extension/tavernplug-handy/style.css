@@ -12,6 +12,27 @@
   border: 0 !important;
   box-shadow: none !important;
   outline: none !important;
+  background: transparent !important;
+}
+
+.tavernplug-panel.inline-drawer,
+.tavernplug-panel.inline-drawer .inline-drawer-header,
+.tavernplug-panel.inline-drawer .inline-drawer-content {
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+}
+
+.tavernplug-panel.inline-drawer .inline-drawer-header {
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(128, 128, 128, 0.13) !important;
+  transition: background-color 120ms ease;
+}
+
+.tavernplug-panel.inline-drawer .inline-drawer-header:hover {
+  background: rgba(128, 128, 128, 0.22) !important;
 }
 
 .tavernplug-header {
@@ -26,6 +47,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
 .tavernplug-header-icon {
@@ -40,6 +63,77 @@
 
 .tavernplug-body {
   padding-top: 10px;
+}
+
+.tavernplug-mode-switch {
+  margin-bottom: 10px;
+}
+
+.tavernplug-mode-selected {
+  background: #3da9fc;
+  border-color: #3da9fc;
+  color: #fff;
+}
+
+.tavernplug-setup-card {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 16%, transparent);
+}
+
+.tavernplug-setup-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.tavernplug-setup-state {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: rgba(128, 128, 128, 0.18);
+}
+
+.tavernplug-setup-state[data-state="ok"] {
+  background: #2f7d32;
+  color: #fff;
+}
+
+.tavernplug-setup-state[data-state="warn"] {
+  background: #9c6f0f;
+  color: #fff;
+}
+
+.tavernplug-setup-state[data-state="error"] {
+  background: #b32020;
+  color: #fff;
+}
+
+.tavernplug-setup-hint,
+.tavernplug-setup-guide-body {
+  font-size: 0.84rem;
+  line-height: 1.4;
+  opacity: 0.92;
+}
+
+.tavernplug-setup-guide-body {
+  display: grid;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.tavernplug-setup-note {
+  margin-top: 4px;
 }
 
 .tavernplug-collapsed .tavernplug-body {

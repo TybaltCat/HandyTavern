@@ -28,6 +28,16 @@ function getMotionStrokeOverride01(motion = {}) {
   return clamp01(raw / 100);
 }
 
+function getExplicitSlideWindowOverride(motion = {}) {
+  const rawMin = Number(motion?.slideMinPct);
+  const rawMax = Number(motion?.slideMaxPct);
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) return null;
+  return {
+    min: clamp01(Math.min(rawMin, rawMax) / 100),
+    max: clamp01(Math.max(rawMin, rawMax) / 100)
+  };
+}
+
 function getGlobalStrokeWindow(motionConfig) {
   const pad = Math.max(0, Math.min(0.2, Number(motionConfig.endpointSafetyPadding ?? 0.03)));
   const rawMin = clamp01(motionConfig.globalStrokeMin ?? 0);
@@ -69,6 +79,21 @@ function computeStrokePosition(depth, motionConfig, motion = {}) {
 }
 
 function computeMappedStrokeWindow(depth, motionConfig, motion = {}) {
+  const explicitWindow = getExplicitSlideWindowOverride(motion);
+  if (explicitWindow) {
+    const mappedStart = applyPhysicalStrokeWindow(
+      applyGlobalStrokeWindow(explicitWindow.min, motionConfig),
+      motionConfig
+    );
+    const mappedEnd = applyPhysicalStrokeWindow(
+      applyGlobalStrokeWindow(explicitWindow.max, motionConfig),
+      motionConfig
+    );
+    return {
+      minStroke: Math.min(mappedStart, mappedEnd),
+      maxStroke: Math.max(mappedStart, mappedEnd)
+    };
+  }
   const override01 = getMotionStrokeOverride01(motion);
   const strokePosition = computeStrokePosition(depth, motionConfig, motion);
   let logicalMinStroke;

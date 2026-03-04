@@ -18,13 +18,14 @@ const DEFAULTS = {
   showDebugInfo: true,
   advancedOpen: false,
   speedProfilesOpen: false,
+  uiMode: "basic",
+  setupGuideOpen: false,
   holdUntilNextCommand: true,
   stopPreviousOnNewMotion: true,
-  panelCollapsed: false,
+  panelCollapsed: true,
   safeMode: true,
   safeMaxSpeed: 75,
-  patternIntervalMs: 700,
-  cumStyle: "intense",
+  patternIntervalMs: 15000,
   cumDepth: "deep",
   cumStrokePct: 90,
   cumSpeedPct: 75,
@@ -131,6 +132,9 @@ normalizePercentSetting("physicalMaxPct");
 normalizePercentSetting("endpointSafetyPaddingPct");
 normalizePercentSetting("handyNativeMinPct");
 normalizePercentSetting("handyNativeMaxPct");
+if (Number(settings.patternIntervalMs) < 3000) {
+  settings.patternIntervalMs = 15000;
+}
 extensionSettingsStore[EXTENSION_NAME] = settings;
 
 let lastSentMessageId = -1;
@@ -142,6 +146,8 @@ let healthPollingPaused = false;
 let statusEl = null;
 let modeStateEl = null;
 let healthEl = null;
+let setupStateEl = null;
+let setupHintEl = null;
 let panelRetryHandle = null;
 let testModeActive = false;
 let testModeStyle = "normal";
@@ -150,6 +156,7 @@ let preTestHoldSetting = null;
 let patternIntervalHandle = null;
 let activePatternName = null;
 let patternStep = 0;
+let patternRunToken = 0;
 let quickStopRetryHandle = null;
 let lastObservedMessageId = -1;
 let lastObservedMessageText = "";
@@ -183,11 +190,34 @@ function setHealth(message) {
   if (healthEl) healthEl.textContent = message;
 }
 
+function setSetupState(state, hint = "", tone = "neutral") {
+  if (setupStateEl) {
+    setupStateEl.textContent = state;
+    setupStateEl.dataset.state = tone;
+  }
+  if (setupHintEl) setupHintEl.textContent = hint;
+}
+
+function hasConfiguredConnectionKey() {
+  return String(settings.handyConnectionKey ?? "").trim().length > 0;
+}
+
 function cloneMotionPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
   const text = String(payload.text ?? "").trim();
   if (!text) return null;
-  return { text };
+  const next = { text };
+  const rawCumStrokePct = Number(payload.cumStrokePct);
+  if (Number.isFinite(rawCumStrokePct)) {
+    next.cumStrokePct = clampPercent(rawCumStrokePct);
+  }
+  const rawSlideMinPct = Number(payload.slideMinPct);
+  const rawSlideMaxPct = Number(payload.slideMaxPct);
+  if (Number.isFinite(rawSlideMinPct) && Number.isFinite(rawSlideMaxPct)) {
+    next.slideMinPct = clampPercent(Math.min(rawSlideMinPct, rawSlideMaxPct));
+    next.slideMaxPct = clampPercent(Math.max(rawSlideMinPct, rawSlideMaxPct));
+  }
+  return next;
 }
 
 function markNonCumMotionPayload(payload) {
@@ -362,6 +392,49 @@ function setSpeedProfilesOpen(panel, open) {
   saveSettings();
 }
 
+function updateUiModeControls(panel) {
+  if (!panel) return;
+  const advanced = settings.uiMode === "advanced";
+  panel.querySelectorAll("[data-ui-mode='advanced']").forEach((element) => {
+    if (!advanced) {
+      element.style.display = "none";
+      return;
+    }
+    if (element.classList.contains("tavernplug-advanced-body")) {
+      element.style.display = settings.advancedOpen ? "block" : "none";
+      return;
+    }
+    if (element.classList.contains("tavernplug-speed-profiles-body")) {
+      element.style.display = settings.speedProfilesOpen ? "block" : "none";
+      return;
+    }
+    element.style.display = "";
+  });
+  const basicButton = panel.querySelector(`#${EXTENSION_NAME}-ui-basic`);
+  const advancedButton = panel.querySelector(`#${EXTENSION_NAME}-ui-advanced`);
+  if (basicButton) basicButton.classList.toggle("tavernplug-mode-selected", !advanced);
+  if (advancedButton) advancedButton.classList.toggle("tavernplug-mode-selected", advanced);
+}
+
+function setUiMode(mode) {
+  settings.uiMode = mode === "advanced" ? "advanced" : "basic";
+  const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
+  updateUiModeControls(panel);
+  saveSettings();
+  setStatus(`View set to ${settings.uiMode}`);
+}
+
+function setSetupGuideOpen(panel, open) {
+  settings.setupGuideOpen = Boolean(open);
+  const body = panel.querySelector(".tavernplug-setup-guide-body");
+  const button = panel.querySelector(`#${EXTENSION_NAME}-setup-guide`);
+  if (body) body.style.display = settings.setupGuideOpen ? "block" : "none";
+  if (button) {
+    button.textContent = settings.setupGuideOpen ? "Hide Setup Help" : "Show Setup Help";
+  }
+  saveSettings();
+}
+
 function messageHasMotionTag(text) {
   return /\[motion:\s*[^\]]+\]/i.test(text);
 }
@@ -465,9 +538,23 @@ async function syncConfig() {
     healthFailureCount = 0;
     healthPollingPaused = false;
     startHealthPolling();
+    setSetupState(
+      "Bridge reachable",
+      "Bridge is responding. Click Connect Device to pair with your Handy.",
+      "warn"
+    );
     setStatus("Config synced");
     return true;
   } catch (error) {
+    setSetupState(
+      "Bridge offline",
+      "Start the local TavernPlug bridge, then try Connect Device again.",
+      "error"
+    );
+    const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
+    if (panel && !settings.setupGuideOpen) {
+      setSetupGuideOpen(panel, true);
+    }
     setStatus(`Config error: ${error.message}. Is bridge running on ${settings.bridgeUrl}?`);
     return false;
   }
@@ -483,50 +570,33 @@ async function handleSyncAndTestConnection() {
     const device = result?.controller?.selectedDevice || "none";
     setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: idle`);
     setSyncButtonConnected(result?.controller?.connected);
+    if (result?.controller?.connected && hasConfiguredConnectionKey()) {
+      setSetupState("Ready", `Connected to ${device}. Motion control is ready.`, "ok");
+    } else {
+      setSetupState(
+        "Bridge reachable",
+        hasConfiguredConnectionKey()
+          ? "Bridge answered, but no device connected yet. Verify your Handy key and retry."
+          : "Bridge answered, but your Handy Connection Key is still empty.",
+        "warn"
+      );
+    }
     setStatus(`Connected (${mode})`);
   } catch (error) {
     setSyncButtonConnected(false);
+    setSetupState(
+      "Bridge reachable",
+      "Bridge answered, but device connection failed. Recheck your Handy key and retry.",
+      "error"
+    );
     setStatus(`Connect test failed: ${error.message}`);
   }
 }
 
 function handleSetupGuide() {
-  const guide = [
-    "TavernPlug Setup Guide",
-    "",
-    "Pick a folder first (NOT inside SillyTavern):",
-    "Windows example: C:\\TavernPlug",
-    "macOS/Linux example: ~/TavernPlug",
-    "",
-    "1) Clone TavernPlug into that folder:",
-    "   Windows (PowerShell):",
-    "   git clone https://github.com/TybaltCat/HandyTavern C:\\TavernPlug",
-    "   cd C:\\TavernPlug",
-    "   macOS/Linux (Terminal):",
-    "   git clone https://github.com/TybaltCat/HandyTavern ~/TavernPlug",
-    "   cd ~/TavernPlug",
-    "",
-    "2) Run installer helper in that folder:",
-    "   Windows: .\\install.ps1",
-    "   macOS/Linux: chmod +x ./install.sh && ./install.sh",
-    "",
-    "3) Edit .env in that same folder and set HANDY_CONNECTION_KEY.",
-    "4) Start bridge from that same folder: npm start",
-    "   Leave this terminal window open while using SillyTavern.",
-    "",
-    "5) In this extension:",
-    "   - Bridge URL: http://127.0.0.1:8787",
-    "   - Paste Handy Connection Key",
-    "   - Click Sync + Test",
-    "",
-    "If Sync + Test fails:",
-    "   - Make sure you are in the TavernPlug folder",
-    "   - Make sure npm start is still running",
-    "   - Click Check Bridge",
-    "",
-    "Important: extension install alone cannot install/run the local bridge."
-  ].join("\n");
-  window.alert(guide);
+  const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
+  if (!panel) return;
+  setSetupGuideOpen(panel, !settings.setupGuideOpen);
 }
 
 async function handleCheckBridge() {
@@ -538,10 +608,30 @@ async function handleCheckBridge() {
     const active = health?.motionLikelyActive ? "active" : "idle";
     setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
     setSyncButtonConnected(Boolean(health?.controller?.connected));
+    if (health?.controller?.connected && hasConfiguredConnectionKey()) {
+      setSetupState("Ready", `Bridge and device look good. Connected to ${device}.`, "ok");
+    } else {
+      setSetupState(
+        "Bridge reachable",
+        hasConfiguredConnectionKey()
+          ? "Bridge is online. If your Handy is not connecting, paste your key and click Connect Device."
+          : "Bridge is online, but your Handy Connection Key is still empty.",
+        "warn"
+      );
+    }
     setStatus("Bridge check OK");
   } catch (error) {
     setHealth("Bridge: offline");
     setSyncButtonConnected(false);
+    setSetupState(
+      "Bridge offline",
+      "The local bridge is not responding. Start it with npm start, then retry.",
+      "error"
+    );
+    const panel = document.querySelector(`#${EXTENSION_NAME}-panel`);
+    if (panel && !settings.setupGuideOpen) {
+      setSetupGuideOpen(panel, true);
+    }
     setStatus(`Bridge check failed: ${error.message}`);
   }
 }
@@ -715,7 +805,7 @@ function onInputChange(event) {
     }
   }
   if (type === "number" && name === "patternIntervalMs") {
-    settings[name] = Math.max(300, Math.min(15000, Number(settings[name]) || 700));
+    settings[name] = Math.max(3000, Math.min(120000, Number(settings[name]) || 15000));
   }
   if (name === "cumStrokePct") {
     settings[name] = clampPercent(settings[name]);
@@ -841,10 +931,6 @@ async function togglePause() {
 }
 
 async function handleParkHold() {
-  if (settings.paused) {
-    setStatus("Paused: park action blocked");
-    return;
-  }
   try {
     stopPatternMode(false);
     await postJson("/park-hold", {});
@@ -856,10 +942,13 @@ async function handleParkHold() {
   }
 }
 
-function clampCumStyle(raw) {
-  const value = String(raw ?? "").toLowerCase();
-  const allowed = ["gentle", "normal", "brisk", "hard", "intense"];
-  return allowed.includes(value) ? value : "intense";
+function cumStyleFromSpeedPct(rawSpeedPct) {
+  const speed = clampPercent(rawSpeedPct);
+  if (speed < 30) return "gentle";
+  if (speed < 50) return "normal";
+  if (speed < 65) return "brisk";
+  if (speed < 80) return "hard";
+  return "intense";
 }
 
 async function handleCumAction() {
@@ -882,7 +971,7 @@ async function handleCumAction() {
     return;
   }
 
-  const style = clampCumStyle(settings.cumStyle);
+  const style = cumStyleFromSpeedPct(settings.cumSpeedPct);
   const cumStrokePct = clampPercent(settings.cumStrokePct);
   const depth = cumDepthFromStrokePct(cumStrokePct);
   const speed = clampPercent(settings.cumSpeedPct);
@@ -920,6 +1009,7 @@ async function startTestMode() {
 }
 
 function stopPatternMode(updateStatus = true) {
+  patternRunToken += 1;
   if (patternIntervalHandle) {
     clearInterval(patternIntervalHandle);
     patternIntervalHandle = null;
@@ -928,6 +1018,41 @@ function stopPatternMode(updateStatus = true) {
   patternStep = 0;
   updateModeStateLine();
   if (updateStatus) setStatus("Pattern stopped");
+}
+
+function patternCycleSteps(name) {
+  if (name === "wave") return 8;
+  if (name === "pulse") return 6;
+  if (name === "ramp") return 5;
+  if (name === "tease_hold") return 4;
+  if (name === "edging_ramp") return 5;
+  if (name === "pulse_bursts") return 4;
+  if (name === "depth_ladder") return 4;
+  if (name === "stutter_break") return 6;
+  if (name === "climax_window") return 4;
+  return 6;
+}
+
+function patternCycleTargetMs(name, baseCycleMs) {
+  if (name === "wave") return Math.round(baseCycleMs * 1.5);
+  if (name === "ramp") return Math.round(baseCycleMs * 1.35);
+  return baseCycleMs;
+}
+
+function patternStepSpan(name, step) {
+  if (name === "stutter_break") {
+    const phase = step % 3;
+    if (phase === 0) return 3;
+    if (phase === 1) return 2;
+    return 1;
+  }
+  return 1;
+}
+
+function patternStepDelayMs(baseIntervalMs) {
+  const jitterScale = 0.12;
+  const delta = (Math.random() * 2 - 1) * jitterScale;
+  return Math.max(250, Math.round(baseIntervalMs * (1 + delta)));
 }
 
 function nextPatternFrame(name, step) {
@@ -947,12 +1072,12 @@ function nextPatternFrame(name, step) {
   }
 
   if (name === "pulse") {
-    if (step % 4 === 3) return { style: "intense", depth: "deep" };
+    if (step % 6 === 5) return { style: "gentle", depth: "deep", speedPct: 20 };
     return { style: "normal", depth: "middle" };
   }
 
   if (name === "ramp") {
-    const cycle = ["gentle", "brisk", "normal", "hard", "intense"];
+    const cycle = ["gentle", "normal", "brisk", "hard", "intense"];
     return { style: cycle[step % cycle.length], depth: "middle" };
   }
 
@@ -960,11 +1085,11 @@ function nextPatternFrame(name, step) {
     const cycle = [
       ["gentle", "tip"],
       ["gentle", "tip"],
-      ["gentle", "middle"],
+      ["normal", "tip"],
       ["gentle", "tip"]
     ];
     const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
+    return { style, depth, slideMinPct: 80, slideMaxPct: 95 };
   }
 
   if (name === "edging_ramp") {
@@ -984,7 +1109,7 @@ function nextPatternFrame(name, step) {
       ["hard", "full"],
       ["intense", "deep"],
       ["hard", "full"],
-      ["normal", "middle"]
+      ["gentle", "middle"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
@@ -992,24 +1117,23 @@ function nextPatternFrame(name, step) {
 
   if (name === "depth_ladder") {
     const cycle = [
-      ["normal", "tip"],
-      ["normal", "middle"],
-      ["hard", "full"],
-      ["normal", "middle"]
+      { style: "normal", depth: "tip", slideMinPct: 0, slideMaxPct: 35 },
+      { style: "normal", depth: "middle", slideMinPct: 35, slideMaxPct: 50 },
+      { style: "hard", depth: "full", slideMinPct: 50, slideMaxPct: 60 },
+      { style: "normal", depth: "full", slideMinPct: 60, slideMaxPct: 75 }
     ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
+    return cycle[step % cycle.length];
   }
 
   if (name === "stutter_break") {
-    if (step % 5 === 4) return { style: "gentle", depth: "middle" };
+    if (step % 3 === 1) return { style: "intense", depth: "tip", slideMinPct: 0, slideMaxPct: 20 };
+    if (step % 3 === 2) return { style: "gentle", depth: "middle" };
     return { style: "hard", depth: "full" };
   }
 
   if (name === "climax_window") {
     const cycle = [
       ["hard", "full"],
-      ["intense", "deep"],
       ["intense", "deep"],
       ["hard", "full"],
       ["brisk", "middle"]
@@ -1018,8 +1142,8 @@ function nextPatternFrame(name, step) {
     return { style, depth };
   }
 
-  const styles = ["gentle", "brisk", "normal", "hard", "intense"];
-  const depths = ["tip", "middle", "full", "deep"];
+  const styles = ["normal", "brisk", "hard"];
+  const depths = ["middle", "full", "deep"];
   return {
     style: styles[Math.floor(Math.random() * styles.length)],
     depth: depths[Math.floor(Math.random() * depths.length)]
@@ -1035,25 +1159,42 @@ async function startPatternMode(name) {
     await startTestMode();
   }
   stopPatternMode(false);
+  const runToken = ++patternRunToken;
   activePatternName = name;
   patternStep = 0;
   updateModeStateLine();
 
-  const tick = async () => {
+  const tick = async (durationSecOverride = null) => {
     const frame = nextPatternFrame(name, patternStep);
-    await sendModeTest(frame.style, frame.depth);
+    await sendModeTest(frame.style, frame.depth, frame, durationSecOverride);
   };
 
-  await tick();
+  const baseCycleMs = Math.max(
+    3000,
+    Math.min(120000, Number(settings.patternIntervalMs) || 15000)
+  );
+  const cycleMs = patternCycleTargetMs(name, baseCycleMs);
   const intervalMs = Math.max(
     300,
-    Math.min(15000, Number(settings.patternIntervalMs) || 700)
+    Math.round(cycleMs / patternCycleSteps(name))
   );
-  patternIntervalHandle = setInterval(() => {
-    patternStep += 1;
-    void tick();
-  }, intervalMs);
-  setStatus(`Pattern running: ${name} @ ${intervalMs}ms`);
+  const durationForDelayMs = (delayMs) => {
+    const overlapMs = 600;
+    return Math.max(3, Number(((delayMs + overlapMs) / 1000).toFixed(2)));
+  };
+  await tick(durationForDelayMs(intervalMs * patternStepSpan(name, patternStep)));
+  const scheduleNext = () => {
+    if (runToken !== patternRunToken) return;
+    const delayMs = patternStepDelayMs(intervalMs * patternStepSpan(name, patternStep));
+    patternIntervalHandle = setTimeout(async () => {
+      if (runToken !== patternRunToken) return;
+      patternStep += 1;
+      await tick(durationForDelayMs(delayMs));
+      scheduleNext();
+    }, delayMs);
+  };
+  scheduleNext();
+  setStatus(`Pattern running: ${name} over ~${cycleMs}ms (~${intervalMs}ms per beat)`);
 }
 
 async function handleTestMotion() {
@@ -1118,17 +1259,30 @@ function adjustStyleSpeed(style, delta) {
   }
 }
 
-async function sendModeTest(style, depth) {
+async function sendModeTest(style, depth, options = {}, durationSecOverride = null) {
   if (settings.paused) {
     setStatus("Paused: mode test blocked");
     return;
   }
   testModeStyle = style;
   testModeDepth = depth;
-  const speed = currentStyleSpeed(style);
-  const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=3s]`;
+  const overrideSpeed = Number(options.speedPct);
+  const speed = Number.isFinite(overrideSpeed)
+    ? clampPercent(overrideSpeed)
+    : currentStyleSpeed(style);
+  const durationSec = Number.isFinite(Number(durationSecOverride))
+    ? Math.max(1, Number(durationSecOverride))
+    : 3;
+  const formattedDuration = String(durationSec).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+  const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=${formattedDuration}s]`;
   try {
     const payload = { text: testTag };
+    const rawSlideMinPct = Number(options.slideMinPct);
+    const rawSlideMaxPct = Number(options.slideMaxPct);
+    if (Number.isFinite(rawSlideMinPct) && Number.isFinite(rawSlideMaxPct)) {
+      payload.slideMinPct = clampPercent(Math.min(rawSlideMinPct, rawSlideMaxPct));
+      payload.slideMaxPct = clampPercent(Math.max(rawSlideMinPct, rawSlideMaxPct));
+    }
     await postJson("/motion", payload);
     markNonCumMotionPayload(payload);
     setStatus(`Mode test sent: ${style}/${depth} @ ${speed}`);
@@ -1175,6 +1329,8 @@ function setPanelCollapsed(panel, collapsed) {
   settings.panelCollapsed = Boolean(collapsed);
   panel.classList.toggle("tavernplug-collapsed", settings.panelCollapsed);
   panel.classList.toggle("open", !settings.panelCollapsed);
+  const body = panel.querySelector(".tavernplug-body");
+  if (body) body.style.display = settings.panelCollapsed ? "none" : "block";
   const toggle = panel.querySelector(".tavernplug-toggle");
   if (toggle) {
     toggle.classList.toggle("fa-circle-chevron-right", settings.panelCollapsed);
@@ -1198,22 +1354,37 @@ function renderSettingsPanel() {
       <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down tavernplug-toggle" role="button" tabindex="0" aria-label="Toggle HandyTavern settings" aria-expanded="true"></div>
     </div>
     <div class="tavernplug-body inline-drawer-content">
-    <div class="tavernplug-actions">
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-setup-guide">Setup Guide</button>
+    <div class="tavernplug-actions tavernplug-mode-switch">
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-ui-basic">Basic</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-ui-advanced">Advanced</button>
     </div>
-    <div class="tavernplug-row">
-      <label>Bridge URL</label>
-      <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
-    </div>
-    <div class="tavernplug-row">
-      <label>Handy Connection Key</label>
-      <div class="tavernplug-key-inline">
-        <input class="tavernplug-key-input" type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
-        <button class="menu_button tavernplug-sync-btn" type="button" id="${EXTENSION_NAME}-sync-test">Sync + Test</button>
+    <div class="tavernplug-setup-card">
+      <div class="tavernplug-setup-eyebrow">Quick Setup</div>
+      <div class="tavernplug-setup-state" id="${EXTENSION_NAME}-setup-state" data-state="neutral">Waiting for setup</div>
+      <div class="tavernplug-setup-hint" id="${EXTENSION_NAME}-setup-hint">Paste your Handy Connection Key, then click Connect Device.</div>
+      <div class="tavernplug-row">
+        <label>Handy Connection Key</label>
+        <div class="tavernplug-key-inline">
+          <input class="tavernplug-key-input" type="text" name="handyConnectionKey" value="${settings.handyConnectionKey}" />
+          <button class="menu_button tavernplug-sync-btn" type="button" id="${EXTENSION_NAME}-sync-test">Connect Device</button>
+        </div>
+      </div>
+      <div class="tavernplug-actions">
+        <button class="menu_button" type="button" id="${EXTENSION_NAME}-check-bridge">Check Bridge</button>
+        <button class="menu_button" type="button" id="${EXTENSION_NAME}-setup-guide">Show Setup Help</button>
+      </div>
+      <div class="tavernplug-setup-guide-body" style="display:none;">
+        <div>1. Install TavernPlug outside your SillyTavern folder.</div>
+        <div>2. Run the installer script in the TavernPlug folder.</div>
+        <div>3. Set HANDY_CONNECTION_KEY in .env.</div>
+        <div>4. Start the local bridge with <code>npm start</code> and keep it running.</div>
+        <div>5. Return here, paste the same key, and click Connect Device.</div>
+        <div class="tavernplug-setup-note">If the bridge stays offline, confirm the default URL is <code>http://127.0.0.1:8787</code>.</div>
       </div>
     </div>
-    <div class="tavernplug-actions">
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-check-bridge">Check Bridge</button>
+    <div class="tavernplug-row" data-ui-mode="advanced">
+      <label>Bridge URL</label>
+      <input type="text" name="bridgeUrl" value="${settings.bridgeUrl}" />
     </div>
     <div class="tavernplug-row">
       <label>Global Stroke Window (0-100)</label>
@@ -1231,14 +1402,14 @@ function renderSettingsPanel() {
       </div>
       <div class="tavernplug-global-range-value tavernplug-speed-range-value">${clampPercent(settings.speedMin)}% to ${clampPercent(settings.speedMax)}%</div>
     </div>
-    <div class="tavernplug-actions">
+    <div class="tavernplug-actions" data-ui-mode="advanced">
       <button class="menu_button tavernplug-advanced-toggle" type="button">Advanced Settings (+)</button>
       <button class="menu_button tavernplug-speed-profiles-toggle" type="button">Speed Profiles (+)</button>
     </div>
-    <div class="tavernplug-speed-profiles-body" style="display:none;">
+    <div class="tavernplug-speed-profiles-body" style="display:none;" data-ui-mode="advanced">
       <div class="tavernplug-row">
-        <label>Pattern Interval (ms)</label>
-        <input type="number" step="100" min="300" max="15000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
+        <label>Pattern Cycle Length (ms)</label>
+        <input type="number" step="500" min="3000" max="120000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
       </div>
       <div class="tavernplug-row">
         <label>Gentle Speed %</label>
@@ -1284,16 +1455,6 @@ function renderSettingsPanel() {
         <label>Cum Button</label>
       </div>
       <div class="tavernplug-row">
-        <label>Cum Button Style</label>
-        <select name="cumStyle">
-          <option value="gentle" ${settings.cumStyle === "gentle" ? "selected" : ""}>Gentle</option>
-          <option value="normal" ${settings.cumStyle === "normal" ? "selected" : ""}>Normal</option>
-          <option value="brisk" ${settings.cumStyle === "brisk" ? "selected" : ""}>Brisk</option>
-          <option value="hard" ${settings.cumStyle === "hard" ? "selected" : ""}>Hard</option>
-          <option value="intense" ${settings.cumStyle === "intense" ? "selected" : ""}>Intense</option>
-        </select>
-      </div>
-      <div class="tavernplug-row">
         <label>Cum Stroke Length (0-100)</label>
         <input type="range" step="1" min="0" max="100" name="cumStrokePct" value="${clampPercent(settings.cumStrokePct)}" />
         <div class="tavernplug-global-range-value tavernplug-cum-stroke-value">${clampPercent(settings.cumStrokePct)}% (${cumDepthFromStrokePct(settings.cumStrokePct)})</div>
@@ -1307,7 +1468,7 @@ function renderSettingsPanel() {
         <input type="number" step="0.25" min="0.25" max="120" name="cumDurationMs" value="${(Math.max(250, Math.min(120000, Number(settings.cumDurationMs) || 6000)) / 1000).toFixed(2).replace(/\.?0+$/, "")}" />
       </div>
     </div>
-    <div class="tavernplug-advanced-body" style="display:none;">
+    <div class="tavernplug-advanced-body" style="display:none;" data-ui-mode="advanced">
     <div class="tavernplug-row">
       <label>Handy Native API Base URL</label>
       <input type="text" name="handyApiBaseUrl" value="${settings.handyApiBaseUrl}" />
@@ -1350,6 +1511,8 @@ function renderSettingsPanel() {
         <input type="checkbox" name="autoSend" ${settings.autoSend ? "checked" : ""} />
         Auto-send latest assistant messages
       </label>
+    </div>
+    <div class="tavernplug-row" data-ui-mode="advanced">
       <label title="ON: cleaner command handoff, may feel slightly cut. OFF: smoother blending, but less predictable overlap.">
         <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
         Stop previous motion when a new message is sent
@@ -1363,7 +1526,7 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-hard">Hard</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-intense">Intense</button>
     </div>
-    <div class="tavernplug-actions">
+    <div class="tavernplug-actions" data-ui-mode="advanced">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-wave">Wave</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-pulse">Pulse</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-ramp">Ramp</button>
@@ -1376,7 +1539,7 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-climax">Climax</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-stop">Stop Pattern</button>
     </div>
-    <div class="tavernplug-actions">
+    <div class="tavernplug-actions" data-ui-mode="advanced">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-tip">Tip</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-middle">Middle</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-full">Full</button>
@@ -1412,6 +1575,12 @@ function renderSettingsPanel() {
   });
   panel.querySelector(`#${EXTENSION_NAME}-setup-guide`)?.addEventListener("click", () => {
     handleSetupGuide();
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-ui-basic`)?.addEventListener("click", () => {
+    setUiMode("basic");
+  });
+  panel.querySelector(`#${EXTENSION_NAME}-ui-advanced`)?.addEventListener("click", () => {
+    setUiMode("advanced");
   });
   panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
     stopPatternMode(false);
@@ -1558,9 +1727,20 @@ function renderSettingsPanel() {
   updateCumStrokeValue(panel);
 
   container.append(panel);
+  setupStateEl = panel.querySelector(`#${EXTENSION_NAME}-setup-state`);
+  setupHintEl = panel.querySelector(`#${EXTENSION_NAME}-setup-hint`);
   modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);
   healthEl = panel.querySelector(`#${EXTENSION_NAME}-health`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
+  setSetupGuideOpen(panel, settings.setupGuideOpen);
+  updateUiModeControls(panel);
+  setSetupState(
+    hasConfiguredConnectionKey() ? "Checking setup" : "Waiting for setup",
+    hasConfiguredConnectionKey()
+      ? "Click Connect Device to verify the bridge and your Handy."
+      : "Paste your Handy Connection Key, then click Connect Device.",
+    "neutral"
+  );
   updateModeStateLine();
   updateHoldButton();
   updateStrictButton();
@@ -1673,10 +1853,26 @@ function startHealthPolling() {
         : "";
       setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}${hspBits}${depthBits}`);
       setSyncButtonConnected(Boolean(health?.controller?.connected));
+      if (health?.controller?.connected && hasConfiguredConnectionKey()) {
+        setSetupState("Ready", `Connected to ${device}. Motion control is ready.`, "ok");
+      } else {
+        setSetupState(
+          "Bridge reachable",
+          hasConfiguredConnectionKey()
+            ? "Bridge is online. Click Connect Device after entering your Handy key."
+            : "Bridge is online, but your Handy Connection Key is still empty.",
+          "warn"
+        );
+      }
     } catch (error) {
       healthFailureCount += 1;
       setHealth("Bridge: offline");
       setSyncButtonConnected(false);
+      setSetupState(
+        "Bridge offline",
+        "The local bridge is not responding. Start it with npm start, then retry.",
+        "error"
+      );
       if (healthFailureCount >= 5) {
         if (healthHandle) {
           clearInterval(healthHandle);

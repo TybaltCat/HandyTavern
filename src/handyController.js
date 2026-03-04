@@ -60,6 +60,16 @@ function getMotionStrokeOverride01(motion = {}) {
   return clamp01(raw / 100);
 }
 
+function getExplicitSlideWindowOverride(motion = {}) {
+  const rawMin = Number(motion?.slideMinPct);
+  const rawMax = Number(motion?.slideMaxPct);
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) return null;
+  return {
+    min: clamp01(Math.min(rawMin, rawMax) / 100),
+    max: clamp01(Math.max(rawMin, rawMax) / 100)
+  };
+}
+
 function remapSpeed(speed, speedMin, speedMax) {
   const min = clamp01(speedMin);
   const max = clamp01(speedMax);
@@ -457,16 +467,32 @@ export class HandyController {
     );
     const scalar = clamp01(remapped * depthMultiplier);
     // User-tunable stroke limits are applied inside computeStrokePosition().
-    const override01 = getMotionStrokeOverride01(motion);
-    const strokePosition = computeStrokePosition(motion.depth, motionConfig, motion);
-    const logicalMinStroke = override01 !== null
-      ? getGlobalStrokeWindow(motionConfig).min
-      : applyGlobalStrokeWindow(clamp01(motionConfig.minimumAllowedStroke ?? 0), motionConfig);
-    const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
-    const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
-    const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
-    const minStroke = Math.min(mappedStart, mappedEnd);
-    const maxStroke = Math.max(mappedStart, mappedEnd);
+    const explicitWindow = getExplicitSlideWindowOverride(motion);
+    let minStroke;
+    let maxStroke;
+    if (explicitWindow) {
+      const mappedStart = applyPhysicalStrokeWindow(
+        applyGlobalStrokeWindow(explicitWindow.min, motionConfig),
+        motionConfig
+      );
+      const mappedEnd = applyPhysicalStrokeWindow(
+        applyGlobalStrokeWindow(explicitWindow.max, motionConfig),
+        motionConfig
+      );
+      minStroke = Math.min(mappedStart, mappedEnd);
+      maxStroke = Math.max(mappedStart, mappedEnd);
+    } else {
+      const override01 = getMotionStrokeOverride01(motion);
+      const strokePosition = computeStrokePosition(motion.depth, motionConfig, motion);
+      const logicalMinStroke = override01 !== null
+        ? getGlobalStrokeWindow(motionConfig).min
+        : applyGlobalStrokeWindow(clamp01(motionConfig.minimumAllowedStroke ?? 0), motionConfig);
+      const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
+      const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
+      const mappedEnd = applyPhysicalStrokeWindow(logicalMaxStroke, motionConfig);
+      minStroke = Math.min(mappedStart, mappedEnd);
+      maxStroke = Math.max(mappedStart, mappedEnd);
+    }
     // Stronger speed separation across the configured window.
     // Slower styles become noticeably slower and faster styles much faster.
     // Deterministic tempo:

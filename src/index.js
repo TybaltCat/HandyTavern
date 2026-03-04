@@ -414,6 +414,29 @@ function applySafeModeToMotion(motion, config) {
   };
 }
 
+function applyTransientStrokeOverrides(motion, body) {
+  const next = { ...motion };
+  const rawCumStrokePct = Number(body?.cumStrokePct);
+  if (Number.isFinite(rawCumStrokePct)) {
+    next.cumStrokePct = Math.max(0, Math.min(100, rawCumStrokePct));
+    // eslint-disable-next-line no-console
+    console.log(`[motion] cumStrokePct override=${next.cumStrokePct.toFixed(1)}%`);
+  }
+
+  const rawSlideMinPct = Number(body?.slideMinPct);
+  const rawSlideMaxPct = Number(body?.slideMaxPct);
+  if (Number.isFinite(rawSlideMinPct) && Number.isFinite(rawSlideMaxPct)) {
+    next.slideMinPct = Math.max(0, Math.min(100, Math.min(rawSlideMinPct, rawSlideMaxPct)));
+    next.slideMaxPct = Math.max(0, Math.min(100, Math.max(rawSlideMinPct, rawSlideMaxPct)));
+    // eslint-disable-next-line no-console
+    console.log(
+      `[motion] slide override=${next.slideMinPct.toFixed(1)}%..${next.slideMaxPct.toFixed(1)}%`
+    );
+  }
+
+  return next;
+}
+
 function cancelMotionRunner() {
   motionRunToken += 1;
 }
@@ -893,13 +916,7 @@ app.post("/motion", async (req, res) => {
     });
   }
 
-  // Optional one-off stroke override for Cum action (0..100 from extension slider).
-  const rawCumStrokePct = Number(req.body?.cumStrokePct);
-  if (Number.isFinite(rawCumStrokePct)) {
-    motion.cumStrokePct = Math.max(0, Math.min(100, rawCumStrokePct));
-    // eslint-disable-next-line no-console
-    console.log(`[motion] cumStrokePct override=${motion.cumStrokePct.toFixed(1)}%`);
-  }
+  motion = applyTransientStrokeOverrides(motion, req.body);
 
   try {
     await ensureReady();
@@ -940,9 +957,7 @@ app.post("/preview-motion", (req, res) => {
 
   let patternTrigger = null;
   try {
-    if (!(motionConfig.controllerMode === "handy-native" && motionConfig.handyNativeProtocol === "hamp")) {
-      patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
-    }
+    patternTrigger = parsePatternTrigger(text, { strictTag: strictMotionTagRuntime });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // eslint-disable-next-line no-console
@@ -1149,9 +1164,10 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
     }
 
     let motion;
-    try {
-      motion = parseMotion(text, { strictTag: strictMotionTagRuntime });
-    } catch (error) {
+  try {
+    motion = parseMotion(text, { strictTag: strictMotionTagRuntime });
+    motion = applyTransientStrokeOverrides(motion, req.body);
+  } catch (error) {
       // eslint-disable-next-line no-console
       console.error(
         "parse error:",
