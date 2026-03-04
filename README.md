@@ -20,6 +20,8 @@ Windows (PowerShell):
 
 1. Run installer helper:
    - `.\install.ps1`
+   - OR run one-click launcher (install + copy extension + start bridge):
+   - `.\launch-windows.ps1`
 2. Edit `.env` and set your `HANDY_CONNECTION_KEY`.
 3. Start bridge:
    - `npm start`
@@ -43,8 +45,12 @@ You should get a JSON response with parsed motion.
 ## One-step setup scripts
 
 - `install.ps1` installs dependencies and creates `.env` from `.env.example` (if missing).
+- `launch-windows.ps1` installs dependencies, copies extension files to SillyTavern, and starts the bridge in a new PowerShell window.
 - `install.sh` does the same for macOS/Linux.
 - Use `-ForceEnv` (PowerShell) or `--force-env` (bash) to overwrite `.env` from template.
+- `launch-windows.ps1` accepts optional parameters:
+  - `-SillyTavernPath "C:\Path\To\SillyTavern"` to skip path prompt
+  - `-NoLaunch` to skip auto-starting `npm start`
 
 ## Device mode (default: Handy Native)
 
@@ -74,6 +80,8 @@ This repo now includes extension files at the repository root:
 Install by copying those files into a single folder in your SillyTavern third-party extensions directory, for example:
 
 - `<SillyTavern>/public/scripts/extensions/third-party/tavernplug-handy`
+
+Windows shortcut: `.\launch-windows.ps1` can do this copy automatically.
 
 Then reload SillyTavern and open Extensions settings.
 
