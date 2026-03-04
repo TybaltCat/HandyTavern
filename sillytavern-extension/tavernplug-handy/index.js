@@ -143,6 +143,7 @@ let pollHandle = null;
 let healthHandle = null;
 let healthFailureCount = 0;
 let healthPollingPaused = false;
+let bridgeHealthDetected = false;
 let statusEl = null;
 let modeStateEl = null;
 let healthEl = null;
@@ -196,6 +197,14 @@ function setSetupState(state, hint = "", tone = "neutral") {
     setupStateEl.dataset.state = tone;
   }
   if (setupHintEl) setupHintEl.textContent = hint;
+}
+
+function updateBridgeWarning(panel = null) {
+  const activePanel = panel ?? document.querySelector(`#${EXTENSION_NAME}-panel`);
+  if (!activePanel) return;
+  const warningEl = activePanel.querySelector(".tavernplug-bridge-warning");
+  if (!warningEl) return;
+  warningEl.style.display = bridgeHealthDetected ? "none" : "block";
 }
 
 function hasConfiguredConnectionKey() {
@@ -537,7 +546,9 @@ async function syncConfig() {
     await postJson("/config", payload);
     healthFailureCount = 0;
     healthPollingPaused = false;
+    bridgeHealthDetected = true;
     startHealthPolling();
+    updateBridgeWarning();
     setSetupState(
       "Bridge reachable",
       "Bridge is responding. Click Connect Device to pair with your Handy.",
@@ -602,6 +613,8 @@ function handleSetupGuide() {
 async function handleCheckBridge() {
   try {
     const health = await fetchHealth();
+    bridgeHealthDetected = true;
+    updateBridgeWarning();
     const connected = health?.controller?.connected ? "connected" : "disconnected";
     const device = health?.controller?.selectedDevice || "none";
     const mode = health?.controllerMode || settings.controllerMode || "handy-native";
@@ -1358,6 +1371,10 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-ui-basic">Basic</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-ui-advanced">Advanced</button>
     </div>
+    <div class="tavernplug-bridge-warning">
+      <div><strong>Important:</strong> installing the extension alone is not enough.</div>
+      <div>You must install and run the local TavernPlug bridge for Handy communication. Start it with <code>npm start</code>, then click <strong>Check Bridge</strong>.</div>
+    </div>
     <div class="tavernplug-setup-card">
       <div class="tavernplug-setup-eyebrow">Quick Setup</div>
       <div class="tavernplug-setup-state" id="${EXTENSION_NAME}-setup-state" data-state="neutral">Waiting for setup</div>
@@ -1377,7 +1394,7 @@ function renderSettingsPanel() {
         <div>1. Install TavernPlug outside your SillyTavern folder.</div>
         <div>2. Run the installer script in the TavernPlug folder.</div>
         <div>3. Set HANDY_CONNECTION_KEY in .env.</div>
-        <div>4. Start the local bridge with <code>npm start</code> and keep it running.</div>
+        <div>4. Start the local bridge with <code>npm start</code>, keep the window open, and keep it running.</div>
         <div>5. Return here, paste the same key, and click Connect Device.</div>
         <div class="tavernplug-setup-note">If the bridge stays offline, confirm the default URL is <code>http://127.0.0.1:8787</code>.</div>
       </div>
@@ -1734,6 +1751,7 @@ function renderSettingsPanel() {
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
   setSetupGuideOpen(panel, settings.setupGuideOpen);
   updateUiModeControls(panel);
+  updateBridgeWarning(panel);
   setSetupState(
     hasConfiguredConnectionKey() ? "Checking setup" : "Waiting for setup",
     hasConfiguredConnectionKey()
@@ -1838,6 +1856,8 @@ function startHealthPolling() {
   const run = async () => {
     try {
       const health = await fetchHealth();
+      bridgeHealthDetected = true;
+      updateBridgeWarning();
       healthFailureCount = 0;
       const connected = health?.controller?.connected ? "connected" : "disconnected";
       const device = health?.controller?.selectedDevice || "none";
