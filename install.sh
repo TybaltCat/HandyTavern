@@ -45,5 +45,4 @@ printf "\nInstall complete.\n"
 printf "Next steps:\n"
 printf "1) Edit .env and set HANDY_CONNECTION_KEY.\n"
 printf "2) Start bridge: npm start\n"
-printf "3) In SillyTavern extension, set Bridge URL to http://127.0.0.1:8787 and click Sync + Test.\n"
-
+printf "3) In SillyTavern extension, set Bridge URL to http://127.0.0.1:8787 and click Connect Device.\n"

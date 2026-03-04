@@ -1,9 +1,8 @@
 {
   "display_name": "HandyTavern",
   "author": "TybaltCat",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "loading_order": 20,
-  "homePage" : "https://github.com/TybaltCat/HandyTavern",
   "requires": [],
   "optional": [],
   "js": "index.js",

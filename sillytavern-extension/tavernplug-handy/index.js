@@ -1581,142 +1581,72 @@ function renderSettingsPanel() {
       element.addEventListener("input", onInputChange);
     }
   });
-  panel.querySelector(`#${EXTENSION_NAME}-test`)?.addEventListener("click", () => {
-    void handleTestMotion();
+  const bindClick = (suffix, handler) => {
+    panel.querySelector(`#${EXTENSION_NAME}-${suffix}`)?.addEventListener("click", handler);
+  };
+  const bindClassClick = (selector, handler) => {
+    panel.querySelector(selector)?.addEventListener("click", handler);
+  };
+
+  bindClick("test", () => { void handleTestMotion(); });
+  bindClick("sync-test", () => { void handleSyncAndTestConnection(); });
+  bindClick("check-bridge", () => { void handleCheckBridge(); });
+  bindClick("setup-guide", () => { handleSetupGuide(); });
+  bindClick("ui-basic", () => { setUiMode("basic"); });
+  bindClick("ui-advanced", () => { setUiMode("advanced"); });
+
+  const modeButtons = ["gentle", "brisk", "normal", "hard", "intense"];
+  modeButtons.forEach((style) => {
+    bindClick(`mode-${style}`, () => {
+      stopPatternMode(false);
+      void sendModeTest(style, testModeDepth);
+    });
+    bindClick(`${style}-down`, () => {
+      adjustStyleSpeed(style, -10);
+    });
+    bindClick(`${style}-up`, () => {
+      adjustStyleSpeed(style, 10);
+    });
   });
-  panel.querySelector(`#${EXTENSION_NAME}-sync-test`)?.addEventListener("click", () => {
-    void handleSyncAndTestConnection();
+
+  const patternButtons = [
+    ["wave", "wave"],
+    ["pulse", "pulse"],
+    ["ramp", "ramp"],
+    ["random", "random"],
+    ["tease", "tease_hold"],
+    ["edging", "edging_ramp"],
+    ["burst", "pulse_bursts"],
+    ["ladder", "depth_ladder"],
+    ["stutter", "stutter_break"],
+    ["climax", "climax_window"]
+  ];
+  patternButtons.forEach(([buttonSuffix, patternName]) => {
+    bindClick(`pattern-${buttonSuffix}`, () => {
+      void startPatternMode(patternName);
+    });
   });
-  panel.querySelector(`#${EXTENSION_NAME}-check-bridge`)?.addEventListener("click", () => {
-    void handleCheckBridge();
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-setup-guide`)?.addEventListener("click", () => {
-    handleSetupGuide();
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-ui-basic`)?.addEventListener("click", () => {
-    setUiMode("basic");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-ui-advanced`)?.addEventListener("click", () => {
-    setUiMode("advanced");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-gentle`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest("gentle", testModeDepth);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-gentle-down`)?.addEventListener("click", () => {
-    adjustStyleSpeed("gentle", -10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-gentle-up`)?.addEventListener("click", () => {
-    adjustStyleSpeed("gentle", 10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-brisk`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest("brisk", testModeDepth);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-brisk-down`)?.addEventListener("click", () => {
-    adjustStyleSpeed("brisk", -10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-brisk-up`)?.addEventListener("click", () => {
-    adjustStyleSpeed("brisk", 10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-normal`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest("normal", testModeDepth);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-normal-down`)?.addEventListener("click", () => {
-    adjustStyleSpeed("normal", -10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-normal-up`)?.addEventListener("click", () => {
-    adjustStyleSpeed("normal", 10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-hard`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest("hard", testModeDepth);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-hard-down`)?.addEventListener("click", () => {
-    adjustStyleSpeed("hard", -10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-hard-up`)?.addEventListener("click", () => {
-    adjustStyleSpeed("hard", 10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-mode-intense`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest("intense", testModeDepth);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-wave`)?.addEventListener("click", () => {
-    void startPatternMode("wave");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-pulse`)?.addEventListener("click", () => {
-    void startPatternMode("pulse");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-ramp`)?.addEventListener("click", () => {
-    void startPatternMode("ramp");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-random`)?.addEventListener("click", () => {
-    void startPatternMode("random");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-tease`)?.addEventListener("click", () => {
-    void startPatternMode("tease_hold");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-edging`)?.addEventListener("click", () => {
-    void startPatternMode("edging_ramp");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-burst`)?.addEventListener("click", () => {
-    void startPatternMode("pulse_bursts");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-ladder`)?.addEventListener("click", () => {
-    void startPatternMode("depth_ladder");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-stutter`)?.addEventListener("click", () => {
-    void startPatternMode("stutter_break");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-climax`)?.addEventListener("click", () => {
-    void startPatternMode("climax_window");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-pattern-stop`)?.addEventListener("click", () => {
+  bindClick("pattern-stop", () => {
     stopPatternMode();
   });
-  panel.querySelector(`#${EXTENSION_NAME}-intense-down`)?.addEventListener("click", () => {
-    adjustStyleSpeed("intense", -10);
+
+  ["tip", "middle", "full", "deep"].forEach((depth) => {
+    bindClick(`depth-${depth}`, () => {
+      stopPatternMode(false);
+      void sendModeTest(testModeStyle, depth);
+    });
   });
-  panel.querySelector(`#${EXTENSION_NAME}-intense-up`)?.addEventListener("click", () => {
-    adjustStyleSpeed("intense", 10);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-depth-tip`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest(testModeStyle, "tip");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-depth-middle`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest(testModeStyle, "middle");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-depth-full`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest(testModeStyle, "full");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-depth-deep`)?.addEventListener("click", () => {
-    stopPatternMode(false);
-    void sendModeTest(testModeStyle, "deep");
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-safe-toggle`)?.addEventListener("click", () => {
-    void toggleSafeMode(!settings.safeMode);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-hold-toggle`)?.addEventListener("click", () => {
-    void toggleHoldMode(!settings.holdUntilNextCommand);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-strict-toggle`)?.addEventListener("click", () => {
-    toggleStrictMode(!settings.strictTagOnly);
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-stop`)?.addEventListener("click", () => {
-    void handleEmergencyStop();
-  });
-  panel.querySelector(`#${EXTENSION_NAME}-park-hold`)?.addEventListener("click", () => {
-    void handleParkHold();
-  });
-  panel.querySelector(".tavernplug-advanced-toggle")?.addEventListener("click", () => {
+
+  bindClick("safe-toggle", () => { void toggleSafeMode(!settings.safeMode); });
+  bindClick("hold-toggle", () => { void toggleHoldMode(!settings.holdUntilNextCommand); });
+  bindClick("strict-toggle", () => { toggleStrictMode(!settings.strictTagOnly); });
+  bindClick("stop", () => { void handleEmergencyStop(); });
+  bindClick("park-hold", () => { void handleParkHold(); });
+
+  bindClassClick(".tavernplug-advanced-toggle", () => {
     setAdvancedOpen(panel, !settings.advancedOpen);
   });
-  panel.querySelector(".tavernplug-speed-profiles-toggle")?.addEventListener("click", () => {
+  bindClassClick(".tavernplug-speed-profiles-toggle", () => {
     setSpeedProfilesOpen(panel, !settings.speedProfilesOpen);
   });
   const togglePanelCollapsed = () => {

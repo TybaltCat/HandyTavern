@@ -5,7 +5,8 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "sync:extension": "node scripts/sync-extension.mjs"
   },
   "dependencies": {
     "buttplug": "^3.0.0",
