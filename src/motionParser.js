@@ -186,7 +186,7 @@ function shouldAutoTriggerPattern(text, inferredPattern) {
   if (!inferredPattern) return false;
   // Keep auto-pattern activation intentionally rare.
   // Explicit pattern commands still always trigger.
-  const probability = 0.15;
+  const probability = 0.30;
   return deterministicChance(text, `auto-pattern-${inferredPattern}`, probability);
 }
 
