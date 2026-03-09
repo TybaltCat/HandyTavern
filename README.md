@@ -25,7 +25,8 @@ Important:
    - Bridge URL = `http://127.0.0.1:8787`
    - click `Connect Device`
    - click `Check Bridge`
-6. If setup says `Ready`, you're done time to let that LLM jerk your gherkin
+6. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
+7. If setup says `Ready`, you're done time to let that LLM jerk your gherkin
 
 If it says offline, the bridge is not running.
 
@@ -91,7 +92,8 @@ If you close it, the extension will go offline.
 - click `Connect Device`
 - click `Check Bridge`
 
-6. You are done when setup says `Ready`.
+6. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
+7. You are done when setup says `Ready`.
 
 ## Manual Setup (If You Do Not Want The Launcher)
 
@@ -126,6 +128,7 @@ npm start
 ```
 
 5. In SillyTavern, do the same connect steps as above.
+6. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
 
 ## macOS / Linux
 
@@ -140,6 +143,7 @@ npm start
 
 3. Copy `manifest.json`, `index.js`, and `style.css` into your SillyTavern third-party extension folder.
 4. Refresh SillyTavern and connect from the extension panel.
+5. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
 
 ## Prompt / System Prompt Setup (Important)
 
@@ -225,7 +229,6 @@ Practical recommendation:
 ### Park at 0
 
 - Sends a park/hold action to bring Handy to base position.
-
 
 ## Troubleshooting - If Something Is Not Working
 

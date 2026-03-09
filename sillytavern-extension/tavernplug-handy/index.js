@@ -1373,7 +1373,7 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-bridge-warning">
       <div><strong>Important:</strong> installing the extension alone is not enough.</div>
-      <div>You must install and run the local TavernPlug bridge for Handy communication. Start it with <code>npm start</code>, then click <strong>Check Bridge</strong>.</div>
+      <div>You must install and run the local TavernPlug bridge for Handy communication. Open a terminal in your TavernPlug folder, type <code>npm start</code>, press Enter, keep that window open, then click <strong>Check Bridge</strong>.</div>
     </div>
     <div class="tavernplug-setup-card">
       <div class="tavernplug-setup-eyebrow">Quick Setup</div>
@@ -1393,9 +1393,10 @@ function renderSettingsPanel() {
       <div class="tavernplug-setup-guide-body" style="display:none;">
         <div>1. Install TavernPlug outside your SillyTavern folder.</div>
         <div>2. Run the installer script in the TavernPlug folder.</div>
-        <div>3. Set HANDY_CONNECTION_KEY in .env.</div>
+        <div>3. Set Handy Connection Key in this extension panel.</div>
         <div>4. Start the local bridge with <code>npm start</code>, keep the window open, and keep it running.</div>
-        <div>5. Return here, paste the same key, and click Connect Device.</div>
+        <div>5. Click Connect Device.</div>
+        <div>6. Copy the System Prompt block from the README and add it in SillyTavern so the LLM sends motion tags.</div>
         <div class="tavernplug-setup-note">If the bridge stays offline, confirm the default URL is <code>http://127.0.0.1:8787</code>.</div>
       </div>
     </div>
