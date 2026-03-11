@@ -1,8 +1,10 @@
 # TavernPlug (HandyTavern)
 
-TavernPlug converts SillyTavern text output to motion input for your Handy device.
+TavernPlug converts SillyTavern text output to motion input for your Handy 2 device.
 
-##This project requires **3 parts**:
+This project is currently intended for Handy 2. Handy 1 has not been tested and is not officially supported right now.
+
+##This project is made up of three parts below and requires all three to function:
 
 1. A SillyTavern extension (UI panel in SillyTavern)
 2. A local bridge app (runs on your computer with `npm start`)
@@ -18,8 +20,8 @@ Important:
 
 1. Install Node.js + Git.
 2. Clone this repo to a folder like `C:\TavernPlug`.
-3. Run `.\launch-windows.ps1`.
-4. Keep the bridge window open (`npm start` window must stay open AND running).
+3. Run `.\install.ps1`.
+4. Start the bridge with `npm start` and keep that window open.
 5. In SillyTavern, open HandyTavern extension:
    - Input Handy connection key
    - Bridge URL = `http://127.0.0.1:8787`
@@ -31,6 +33,8 @@ Important:
 If it says offline, the bridge is not running.
 
 ## Before You Start
+
+The checklist above is the short version. The sections below are the more detailed step-by-step instructions.
 
 You need:
 
@@ -48,7 +52,7 @@ git --version
 
 If any command fails, install that tool first.
 
-## Fastest Setup For Windows (Recommended)
+## Windows Setup (Recommended)
 
 These steps are written for non-technical users.
 
@@ -65,24 +69,33 @@ git clone https://github.com/TybaltCat/HandyTavern C:\TavernPlug
 cd C:\TavernPlug
 ```
 
-3. Run the one-click launcher:
+3. Install TavernPlug:
 
 ```powershell
-.\launch-windows.ps1
+.\install.ps1
 ```
 
 What this script does:
 
 - installs necessary dependencies
 - creates `.env` if missing
-- asks where your SillyTavern folder is
-- copies necessary extension files into SillyTavern
-- starts the bridge in a new PowerShell window
 
-4. Keep the new bridge window open.
+4. Install or update the SillyTavern extension files:
+
+```powershell
+npm run install:st
+```
+
+5. Start the bridge:
+
+```powershell
+npm start
+```
+
+Keep that PowerShell window open.
 If you close it, the extension will go offline.
 
-5. In SillyTavern:
+6. In SillyTavern:
 
 - refresh the page
 - open Extensions settings
@@ -92,8 +105,22 @@ If you close it, the extension will go offline.
 - click `Connect Device`
 - click `Check Bridge`
 
-6. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
-7. You are done when setup says `Ready`.
+7. In SillyTavern, open **AI Response Configuration**, then add the System Prompt motion block from this README.
+8. You are done when setup says `Ready`.
+
+### Optional Windows Convenience Script
+
+If you want a first-time helper that installs dependencies, copies the extension, and launches the bridge for you, you can still use:
+
+```powershell
+.\launch-windows.ps1
+```
+
+This is optional. For normal daily use, the important command to remember is:
+
+```powershell
+npm start
+```
 
 ## Manual Setup (If You Do Not Want The Launcher)
 
@@ -222,9 +249,16 @@ Practical recommendation:
 
 ### Strict Tags
 
-- ON: extension only acts on valid `[motion: ...]` tags.
+- ON: extension only acts on valid `[motion: ...]` tags, so this works best when you have added the System Prompt block from this README.
 - OFF: extension may infer motion from plain prose.
 - If you want predictable behavior, keep this ON.
+
+### Cum Button Settings
+
+- In Advanced Settings, you can tune the Cum button to better match your preference.
+- `Cum Stroke Length` changes how shallow or deep the button stroke is.
+- `Cum Button Speed` changes how fast the Cum button motion runs.
+- `Cum Button Duration` changes how long that motion lasts before it ends or returns to normal behavior.
 
 ### Park at 0
 
@@ -248,12 +282,12 @@ Practical recommendation:
 ### "Not connecting to device"
 
 - verify Handy key is correct in extension UI
-- if you changed `.env`, restart bridge
+- restart the bridge
 - click `Connect Device` again
 
 ### "Worked before, now dead"
 
-- bridge terminal likely closed
+- bridge terminal window likely closed
 - run `npm start` in powershell window in TavernPlug folder
 
 ## Updating TavernPlug
@@ -281,7 +315,7 @@ Optional flags:
 
 ### `install.ps1`
 
-Install dependencies and create `.env` (if missing). Does not copy extension files automatically.
+Install dependencies and create `.env` (if missing). The Handy key is entered in the extension UI, not in `.env`.
 
 ## Motion Tag Format (For Prompting)
 

@@ -43,6 +43,6 @@ fi
 
 printf "\nInstall complete.\n"
 printf "Next steps:\n"
-printf "1) Edit .env and set HANDY_CONNECTION_KEY.\n"
-printf "2) Start bridge: npm start\n"
-printf "3) In SillyTavern extension, set Bridge URL to http://127.0.0.1:8787 and click Connect Device.\n"
+printf "1) Start bridge: npm start\n"
+printf "2) In SillyTavern extension, paste your Handy Connection Key.\n"
+printf "3) Confirm Bridge URL is http://127.0.0.1:8787 and click Connect Device.\n"

@@ -11,10 +11,10 @@ const DEFAULTS = {
   handyNativeTrace: false,
   handyNativeMinPct: 25,
   handyNativeMaxPct: 75,
-  pollIntervalMs: 2000,
+  pollIntervalMs: 1000,
   autoSend: true,
   paused: false,
-  strictTagOnly: false,
+  strictTagOnly: true,
   showDebugInfo: true,
   advancedOpen: false,
   speedProfilesOpen: false,
@@ -45,7 +45,7 @@ const DEFAULTS = {
   speedMin: 0,
   speedMax: 75,
   minimumAllowedStroke: 0,
-  endpointSafetyPaddingPct: 5
+  endpointSafetyPaddingPct: 2
 };
 const LOCKED_TECHNICAL_DEFAULTS = {
   invertStroke: false,
@@ -1564,9 +1564,9 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
     </div>
     <div class="tavernplug-actions">
-      <button class="menu_button tavernplug-hold-on-btn" type="button" id="${EXTENSION_NAME}-hold-toggle">Hold ON</button>
-      <button class="menu_button tavernplug-strict-off-btn" type="button" id="${EXTENSION_NAME}-strict-toggle">Strict OFF</button>
-      <button class="menu_button tavernplug-safe-on-btn" type="button" id="${EXTENSION_NAME}-safe-toggle">Safe ON</button>
+      <button class="menu_button tavernplug-hold-on-btn" type="button" id="${EXTENSION_NAME}-hold-toggle" title="Hold ON keeps the current motion running until a new command replaces it. Hold OFF lets motions end on their own after their duration.">Hold ON</button>
+      <button class="menu_button tavernplug-strict-on-btn" type="button" id="${EXTENSION_NAME}-strict-toggle" title="Strict ON only accepts valid [motion: ...] tags. Strict OFF lets HandyTavern guess motion from normal prose.">Strict ON</button>
+      <button class="menu_button tavernplug-safe-on-btn" type="button" id="${EXTENSION_NAME}-safe-toggle" title="Safe ON limits speed and keeps motion inside safer bounds. Safe OFF removes those safety limits.">Safe ON</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-park-hold">Park at 0</button>
       <button class="menu_button tavernplug-stop" type="button" id="${EXTENSION_NAME}-stop">Emergency Stop</button>
     </div>

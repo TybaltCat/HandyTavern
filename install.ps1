@@ -50,6 +50,6 @@ if ($ForceEnv -or !(Test-Path $envPath)) {
 Write-Host ""
 Write-Host "Install complete." -ForegroundColor Green
 Write-Host "Next steps:"
-Write-Host "1) Edit .env and set HANDY_CONNECTION_KEY."
-Write-Host "2) Start bridge: npm start"
-Write-Host "3) In SillyTavern extension, set Bridge URL to http://127.0.0.1:8787 and click Connect Device."
+Write-Host "1) Start bridge: npm start"
+Write-Host "2) In SillyTavern extension, paste your Handy Connection Key."
+Write-Host "3) Confirm Bridge URL is http://127.0.0.1:8787 and click Connect Device."

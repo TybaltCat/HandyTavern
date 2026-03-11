@@ -31,7 +31,7 @@ app.use((req, _res, next) => {
 app.use(express.json({ limit: "256kb" }));
 
 const port = Number(process.env.PORT ?? 8787);
-const enabled = String(process.env.ENABLE_DEVICE ?? "false").toLowerCase() === "true";
+const enabled = String(process.env.ENABLE_DEVICE ?? "true").toLowerCase() === "true";
 let strictMotionTagRuntime =
   String(process.env.STRICT_MOTION_TAG ?? "true").toLowerCase() === "true";
 
@@ -51,7 +51,7 @@ const controllers = {
 };
 const DEADMAN_TIMEOUT_MS = Math.max(
   5000,
-  Number(process.env.DEADMAN_TIMEOUT_MS ?? 300000)
+  Number(process.env.DEADMAN_TIMEOUT_MS ?? 600000)
 );
 const FORCE_HAMP_PROTOCOL =
   String(process.env.FORCE_HAMP_PROTOCOL ?? "true").toLowerCase() === "true";

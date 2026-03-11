@@ -110,8 +110,8 @@ Copy-Item -Force (Join-Path $PSScriptRoot "index.js") (Join-Path $extensionPath 
 Copy-Item -Force (Join-Path $PSScriptRoot "style.css") (Join-Path $extensionPath "style.css")
 
 $envContent = Get-Content $envPath -Raw
-if ($envContent -notmatch "(?m)^\s*HANDY_CONNECTION_KEY\s*=\s*.+$" -or $envContent -match "(?m)^\s*HANDY_CONNECTION_KEY\s*=\s*$") {
-  Write-Warn "HANDY_CONNECTION_KEY appears empty in .env. Edit .env before connecting."
+if ($envContent -match "(?m)^\s*ENABLE_DEVICE\s*=\s*false\s*$") {
+  Write-Warn "ENABLE_DEVICE is set to false in .env. Bridge will start in simulation mode until you change it back to true."
 }
 
 if (-not $NoLaunch) {
@@ -125,6 +125,6 @@ Write-Host "Done." -ForegroundColor Green
 Write-Host "Next steps:"
 Write-Host "1) In SillyTavern, refresh the page."
 Write-Host "2) Open HandyTavern extension."
-Write-Host "3) Paste Handy Connection Key if needed."
+Write-Host "3) Paste your Handy Connection Key."
 Write-Host "4) Set Bridge URL to http://127.0.0.1:8787"
 Write-Host "5) Click Connect Device, then Check Bridge."
