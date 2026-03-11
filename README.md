@@ -2,6 +2,8 @@
 
 TavernPlug converts SillyTavern text output to motion input for your Handy 2 device.
 
+License: non-commercial use is allowed with attribution. Commercial use requires separate permission.
+
 This project is currently intended for Handy 2. Handy 1 has not been tested and is not officially supported right now.
 
 Supported: Handy 2
