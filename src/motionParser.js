@@ -1,7 +1,7 @@
 // Add/remove allowed style words for strict [motion: ...] tags here.
-const VALID_STYLES = new Set(["gentle", "brisk", "normal", "hard", "intense", "rough"]);
+const VALID_STYLES = new Set(["tease", "gentle", "steady", "brisk", "normal", "hard", "intense", "rough"]);
 // Add/remove allowed depth words for strict tags here.
-const VALID_DEPTHS = new Set(["tip", "middle", "full", "deep"]);
+const VALID_DEPTHS = new Set(["tip", "shallow", "middle", "full", "deep"]);
 // Add/remove supported pattern names for temporary LLM pattern triggers here.
 const VALID_PATTERNS = new Set([
   "wave",
@@ -10,6 +10,10 @@ const VALID_PATTERNS = new Set([
   "random",
   "tease_hold",
   "edging_ramp",
+  "edger",
+  "doubletap",
+  "pendulum",
+  "tremor",
   "pulse_bursts",
   "depth_ladder",
   "stutter_break",
@@ -21,6 +25,13 @@ const PATTERN_NAME_ALIASES = {
   teasing: "tease_hold",
   edging: "edging_ramp",
   edge: "edging_ramp",
+  edger: "edger",
+  double: "doubletap",
+  doubletap: "doubletap",
+  pendulum: "pendulum",
+  swing: "pendulum",
+  tremor: "tremor",
+  flutter: "tremor",
   burst: "pulse_bursts",
   bursts: "pulse_bursts",
   ladder: "depth_ladder",
@@ -28,6 +39,13 @@ const PATTERN_NAME_ALIASES = {
   climax: "climax_window"
 };
 const PATTERN_STOP_WORDS = new Set(["off", "stop", "none"]);
+
+function normalizeStyleName(raw) {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "normal") return "steady";
+  if (value === "rough") return "hard";
+  return value;
+}
 
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
@@ -65,8 +83,9 @@ function parseDurationMs(raw) {
 
 function parseTagBody(tagBody) {
   const fields = {};
-  // Key=value tokenizer for [motion: ...]. Update if you want quoted values.
-  const pattern = /([a-z]+)\s*=\s*([^\s\]]+)/gi;
+  // Accept both key=value and key value pairs inside [motion: ...].
+  // This keeps interoperability with extensions that emit space-delimited tags.
+  const pattern = /([a-z]+)(?:\s*=\s*|\s+)([^\s\]]+)/gi;
   let match = pattern.exec(tagBody);
   while (match) {
     fields[match[1].toLowerCase()] = match[2];
@@ -79,7 +98,7 @@ function parsePatternName(raw) {
   const value = String(raw ?? "").trim().toLowerCase();
   const aliased = PATTERN_NAME_ALIASES[value] ?? value;
   if (!VALID_PATTERNS.has(aliased)) {
-    throw new Error("Invalid pattern. Allowed: wave, pulse, ramp, random, tease_hold, edging_ramp, pulse_bursts, depth_ladder, stutter_break, climax_window");
+    throw new Error("Invalid pattern. Allowed: wave, pulse, ramp, random, tease_hold, edging_ramp, edger, doubletap, pendulum, tremor, pulse_bursts, depth_ladder, stutter_break, climax_window");
   }
   return aliased;
 }
@@ -195,8 +214,11 @@ function maybePickMotifByTier(text) {
   const lower = String(text ?? "").toLowerCase();
 
   if (tier === "light") {
-    if (/\b(tease|caress|fondle|massage|brush against|nuzzle|kiss)\b/i.test(lower)) {
-      return deterministicChance(text, "tease_hold", 0.45) ? "tease_hold" : null;
+    if (/\b(tease|teasing|denial|deny|hovering|lingering|withholding)\b/i.test(lower)) {
+      return deterministicChance(text, "tease_hold", 0.22) ? "tease_hold" : null;
+    }
+    if (/\b(caress|fondle|massage|brush against|nuzzle|kiss)\b/i.test(lower)) {
+      return deterministicChance(text, "wave", 0.18) ? "wave" : null;
     }
     return null;
   }
@@ -243,15 +265,21 @@ function inferStyleFromScoring(text) {
   const context = detectContextBoost(text);
   // Tune these weights/words to control style inference behavior in relaxed mode.
   const styleScores = scoreByKeywords(text, {
+    tease: [
+      { pattern: /\b(tease|teasing|denial|deny|hovering|barely|edging slowly|withholding|lingering)\b/i, weight: 3 }
+    ],
     gentle: [
       { pattern: /\b(gentle|tender|soft|sweet|warm|soothing|calm|careful|kind|nurturing|comforting|patient|hushed|mild|featherlight|plush|caress|cuddle|lull|cradle|murmur|hush|comfort|warmth|softness|balm|glow|lullaby|light)\b/i, weight: 2 }
+    ],
+    steady: [
+      { pattern: /\b(steady|measured|even|controlled|consistent|regular|baseline|level|smoothly|set pace)\b/i, weight: 2 }
     ],
     brisk: [
       { pattern: /\b(brisk|steady|firm)\b/i, weight: 2 },
       { pattern: /\b(quick|faster)\b/i, weight: 1 }
     ],
     normal: [
-      { pattern: /\b(normal|steady|easy|casual|relaxed|regular|even|measured|natural|simple|plain|consistent|unremarkable|everyday|familiar|baseline|steadiness|routine|stride|pace|tempo|meter|beat|pattern)\b/i, weight: 2 },
+      { pattern: /\b(normal|easy|casual|relaxed|regular|natural|simple|plain|unremarkable|everyday|familiar|routine|stride|pace|tempo|meter|beat|pattern)\b/i, weight: 2 },
       { pattern: /\b(slow)\b/i, weight: 1 }
     ],
     hard: [
@@ -266,11 +294,12 @@ function inferStyleFromScoring(text) {
 
   // Tier stacker from user-provided word groups.
   if (tier === "light") {
+    styleScores.tease += 3;
     styleScores.gentle += 4;
-    styleScores.normal += 1;
+    styleScores.steady += 1;
   } else if (tier === "medium") {
     styleScores.brisk += 2;
-    styleScores.normal += 3;
+    styleScores.steady += 3;
     styleScores.hard += 1;
   } else if (tier === "high") {
     styleScores.hard += 3;
@@ -281,7 +310,18 @@ function inferStyleFromScoring(text) {
     styleScores.intense += context.strong;
   }
 
-  return pickHighestScore(styleScores, "normal");
+  const inferredStyle = normalizeStyleName(pickHighestScore(styleScores, "steady"));
+  if (inferredStyle === "intense") {
+    const explicitIntense =
+      /\b(intense|extreme|wild|aggressive|fierce|max(?:imum)?|frantic|desperate|overstimulate|force orgasm)\b/i
+        .test(String(text ?? ""));
+    const intenseLead =
+      (styleScores.intense ?? 0) - Math.max(styleScores.hard ?? 0, styleScores.brisk ?? 0);
+    if (!explicitIntense && intenseLead < 2) {
+      return "hard";
+    }
+  }
+  return inferredStyle;
 }
 
 function inferDepthFromScoring(text) {
@@ -290,7 +330,10 @@ function inferDepthFromScoring(text) {
   // Tune depth scoring words here for relaxed mode.
   const depthScores = scoreByKeywords(text, {
     tip: [
-      { pattern: /\b(tip|shallow|edge|glans|frenulum|inch|crown|corona|slit|vulva|labia|outer lips)\b/i, weight: 2 }
+      { pattern: /\b(tip|edge|glans|frenulum|crown|corona|slit)\b/i, weight: 2 }
+    ],
+    shallow: [
+      { pattern: /\b(shallow|outer|outer lips|vulva|labia|just inside|near the entrance|barely in|surface)\b/i, weight: 2 }
     ],
     middle: [
       { pattern: /\b(middle|mid|medium|sheath|your length|measured|limited)\b/i, weight: 2 }
@@ -306,8 +349,10 @@ function inferDepthFromScoring(text) {
   // Tier stacker to bias stroke depth.
   if (tier === "light") {
     depthScores.tip += 2;
-    depthScores.middle += 2;
+    depthScores.shallow += 3;
+    depthScores.middle += 1;
   } else if (tier === "medium") {
+    depthScores.shallow += 1;
     depthScores.middle += 2;
     depthScores.full += 3;
   } else if (tier === "high") {
@@ -336,7 +381,7 @@ function inferPatternFromScoring(text) {
       { pattern: /\b(deliberate|measured|precise|exact|intentional|purposeful|disciplined|steady-handed|regulated|controlled|contained|restrained|composed|grounded|centered|surgical|methodical|consistent|calculated|dialed-in)\b/i, weight: 1 }
     ],
     pulse: [
-      { pattern: /\b(pulse|pulsing|burst|bursts|tease|teasing)\b/i, weight: 2 },
+      { pattern: /\b(pulse|pulsing|burst|bursts)\b/i, weight: 2 },
       // Pulsed and rhythmic
       { pattern: /\b(pulsed|throbbing|metered|rhythmic|cadenced|steady-beat|tempoed|patterned|looping|cyclical|swaying|rocking|loping|marching|drumming|heartbeat-like|pendulum|oscillating|ticking|churning|rolling-beat)\b/i, weight: 2 }
     ],
@@ -360,8 +405,8 @@ function inferPatternFromScoring(text) {
 
   // Tier stacker to choose pattern feel.
   if (tier === "light") {
-    patternScores.wave += 3;
-    patternScores.pulse += 1;
+    patternScores.wave += 4;
+    patternScores.pulse += 0;
   } else if (tier === "medium") {
     patternScores.wave += 2;
     patternScores.ramp += 2;
@@ -416,7 +461,18 @@ function computeAnatomicalBoost(text) {
 }
 
 function parseIntervalMs(raw) {
-  // Reuse duration parser so interval supports units like 1200ms or 1.5s.
+  const cleaned = String(raw).trim().toLowerCase();
+  if (/^\d+(?:\.\d+)?$/.test(cleaned)) {
+    return Math.max(1, Math.round(Number(cleaned)));
+  }
+  return parseDurationMs(raw);
+}
+
+function parsePatternDurationMs(raw) {
+  const cleaned = String(raw).trim().toLowerCase();
+  if (/^\d+(?:\.\d+)?$/.test(cleaned)) {
+    return Math.max(1, Math.round(Number(cleaned)));
+  }
   return parseDurationMs(raw);
 }
 
@@ -425,20 +481,20 @@ function parseTaggedMotion(text) {
   const tagMatch = text.match(/\[motion:\s*([^\]]+)\]/i);
   if (!tagMatch) {
     throw new Error(
-      'Missing motion tag. Use format: [motion: style=normal speed=60 depth=middle duration=6s]'
+      'Missing motion tag. Use format: [motion: style=steady speed=60 depth=middle duration=6s]'
     );
   }
 
   const fields = parseTagBody(tagMatch[1]);
-  const style = (fields.style ?? "normal").toLowerCase();
+  const style = normalizeStyleName(fields.style ?? "steady");
   const depth = (fields.depth ?? "middle").toLowerCase();
 
-  if (!VALID_STYLES.has(style)) {
-    throw new Error("Invalid style. Allowed: gentle, brisk, normal, hard, intense, rough");
+  if (!VALID_STYLES.has(style) && !["steady", "hard"].includes(style)) {
+    throw new Error("Invalid style. Allowed: tease, gentle, steady, brisk, normal, hard, intense, rough");
   }
 
   if (!VALID_DEPTHS.has(depth)) {
-    throw new Error('Invalid depth. Allowed: tip, middle, full, deep');
+    throw new Error('Invalid depth. Allowed: tip, shallow, middle, full, deep');
   }
 
   if (!fields.speed) {
@@ -458,10 +514,12 @@ function parseRelaxedMotion(text) {
   const tier = detectIntensityTier(text);
   const context = detectContextBoost(text);
   // Add alternative free-text style words in this regex when strict mode is disabled.
-  const explicitStyle = lower.match(/\b(gentle|brisk|normal|hard|intense|rough)\b/)?.[1] ?? "";
-  const style = VALID_STYLES.has(explicitStyle) ? explicitStyle : inferStyleFromScoring(text);
+  const explicitStyle = normalizeStyleName(
+    lower.match(/\b(tease|gentle|steady|brisk|normal|hard|intense|rough)\b/)?.[1] ?? ""
+  );
+  const style = VALID_STYLES.has(explicitStyle) ? normalizeStyleName(explicitStyle) : inferStyleFromScoring(text);
   // Add alternative free-text depth words here when strict mode is disabled.
-  const explicitDepth = lower.match(/\b(tip|middle|full|deep)\b/)?.[1] ?? "";
+  const explicitDepth = lower.match(/\b(tip|shallow|middle|full|deep)\b/)?.[1] ?? "";
   let depth = VALID_DEPTHS.has(explicitDepth) ? explicitDepth : inferDepthFromScoring(text);
 
   // Extend speed patterns (e.g. bpm/hz aliases) here for relaxed parsing.
@@ -524,8 +582,8 @@ export function hasMotionIntent(text, options = {}) {
   }
 
   const lower = source.toLowerCase();
-  const hasExplicitStyle = /\b(gentle|brisk|normal|hard|intense|rough)\b/i.test(lower);
-  const hasExplicitDepth = /\b(tip|middle|full|deep)\b/i.test(lower);
+  const hasExplicitStyle = /\b(tease|gentle|steady|brisk|normal|hard|intense|rough)\b/i.test(lower);
+  const hasExplicitDepth = /\b(tip|shallow|middle|full|deep)\b/i.test(lower);
   const hasExplicitSpeed = /\bspeed\s*[:=]?\s*\d+(?:\.\d+)?%?\b/i.test(lower);
   const hasExplicitDuration = /\b(?:for|duration)\s*[:=]?\s*\d+(?:\.\d+)?(?:ms|s|sec|secs|second|seconds)\b/i.test(lower);
   const hasTierOrBoost =
@@ -564,7 +622,7 @@ export function parsePatternTrigger(text, options = {}) {
       pattern: parsePatternName(patternValue),
       speed: fields.speed ? parseSpeed(fields.speed) : 0.55,
       intervalMs: fields.interval ? parseIntervalMs(fields.interval) : 1800,
-      durationMs: fields.duration ? parseDurationMs(fields.duration) : 20000
+      durationMs: fields.duration ? parsePatternDurationMs(fields.duration) : 20000
     };
   }
 
@@ -598,7 +656,7 @@ function parseRelaxedPatternTrigger(text) {
     pattern,
     speed: speedMatch ? parseSpeed(speedMatch[1]) : 0.55,
     intervalMs: intervalMatch ? parseIntervalMs(intervalMatch[1]) : 1800,
-    durationMs: durationMatch ? parseDurationMs(durationMatch[1]) : 20000
+    durationMs: durationMatch ? parsePatternDurationMs(durationMatch[1]) : 20000
   };
 }
 

@@ -16,10 +16,12 @@ function remapSpeed(speed, speedMin, speedMax) {
 }
 
 function depthToNormalizedStroke(depth) {
-  if (depth === "tip") return 0.15;
-  if (depth === "middle") return 0.5;
-  if (depth === "full") return 0.85;
-  return 1.0;
+  if (depth === "base") return 0.04;
+  if (depth === "tip") return 0.96;
+  if (depth === "shallow") return 0.8;
+  if (depth === "middle") return 0.56;
+  if (depth === "full") return 0.32;
+  return 0.14;
 }
 
 function getMotionStrokeOverride01(motion = {}) {
@@ -105,9 +107,13 @@ function computeMappedStrokeWindow(depth, motionConfig, motion = {}) {
     logicalMinStroke = applyGlobalStrokeWindow(localMin, motionConfig);
   }
   if (override01 === null && depth === "tip") {
-    // Keep tip strokes away from the physical base by lifting the floor.
-    const tipFloor = applyGlobalStrokeWindow(0.12, motionConfig);
+    // Keep tip strokes at the far/outside edge of the allowed global window.
+    const tipFloor = applyGlobalStrokeWindow(0.9, motionConfig);
     logicalMinStroke = Math.max(logicalMinStroke, tipFloor);
+  }
+  if (override01 === null && depth === "shallow") {
+    const shallowFloor = applyGlobalStrokeWindow(0.75, motionConfig);
+    logicalMinStroke = Math.max(logicalMinStroke, shallowFloor);
   }
   const logicalMaxStroke = clamp01(Math.max(logicalMinStroke + 0.05, strokePosition));
   const mappedStart = applyPhysicalStrokeWindow(logicalMinStroke, motionConfig);
@@ -608,7 +614,9 @@ export class HandyNativeController {
       Math.round(700 * Math.pow(0.05, remappedNormalizedSpeed))
     );
     const styleHalfCycleFactor = {
+      tease: 1.75,
       gentle: 1.45,
+      steady: 1.0,
       normal: 1.0,
       brisk: 0.82,
       hard: 0.66,
@@ -745,7 +753,9 @@ export class HandyNativeController {
     const remapped = remapSpeed(motion.speed, speedMin, speedMax);
     const safeCap = motionConfig.safeMode ? 0.75 : 1;
     const styleSpeedFactor = {
+      tease: 0.55,
       gentle: 0.75,
+      steady: 0.95,
       normal: 0.95,
       brisk: 1.1,
       hard: 1.25,
@@ -880,7 +890,9 @@ export class HandyNativeController {
     const remapped = remapSpeed(motion.speed, speedMin, speedMax);
     const safeCap = motionConfig.safeMode ? 0.75 : 1;
     const styleSpeedFactor = {
+      tease: 0.55,
       gentle: 0.75,
+      steady: 0.95,
       normal: 0.95,
       brisk: 1.1,
       hard: 1.25,
@@ -924,7 +936,9 @@ export class HandyNativeController {
     const maxPct = Math.round(maxStroke * 1000) / 10;
     const baseHalfCycleMs = Math.max(24, Math.round(720 * Math.pow(0.06, capped)));
     const styleHalfCycleFactor = {
+      tease: 1.7,
       gentle: 1.35,
+      steady: 1.0,
       normal: 1.0,
       brisk: 0.82,
       hard: 0.66,

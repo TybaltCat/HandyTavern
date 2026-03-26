@@ -452,6 +452,12 @@ function markMotionStopped() {
   deadmanEngaged = false;
 }
 
+function isIgnoredSystemImagePrompt(text) {
+  const normalized = String(text ?? "").trim().toLowerCase();
+  return normalized.startsWith("[sillytavern system sends a picture that contains:")
+    || normalized.startsWith("sillytavern system sends a picture that contains:");
+}
+
 function startMotionRunner(runMotion, config) {
   const token = ++motionRunToken;
   const controller = getActiveController(config);
@@ -492,93 +498,171 @@ function logMotionDebug(text) {
 function nextPatternFrame(name, step) {
   if (name === "wave") {
     const cycle = [
-      ["gentle", "middle"],
+      ["gentle", "shallow"],
+      ["steady", "middle"],
       ["brisk", "middle"],
-      ["normal", "middle"],
       ["hard", "full"],
       ["intense", "deep"],
       ["hard", "full"],
-      ["normal", "middle"],
-      ["brisk", "middle"]
+      ["brisk", "middle"],
+      ["steady", "shallow"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
   if (name === "pulse") {
-    if (step % 4 === 3) return { style: "intense", depth: "deep" };
-    return { style: "normal", depth: "middle" };
+    const cycle = [
+      { style: "steady", depth: "middle" },
+      { style: "steady", depth: "middle" },
+      { style: "hard", depth: "full" },
+      { style: "gentle", depth: "deep", speedPct: 20 }
+    ];
+    return cycle[step % cycle.length];
   }
 
   if (name === "ramp") {
-    const cycle = ["gentle", "brisk", "normal", "hard", "intense"];
-    return { style: cycle[step % cycle.length], depth: "middle" };
-  }
-
-  if (name === "tease_hold") {
     const cycle = [
-      ["gentle", "tip"],
-      ["gentle", "tip"],
+      ["tease", "shallow"],
       ["gentle", "middle"],
-      ["gentle", "tip"]
+      ["steady", "middle"],
+      ["brisk", "full"],
+      ["hard", "deep"],
+      ["intense", "deep"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
+  if (name === "tease_hold") {
+    const cycle = [
+      { style: "tease", depth: "tip", slideMinPct: 88, slideMaxPct: 97, durationMultiplier: 0.7 },
+      { style: "gentle", depth: "shallow", slideMinPct: 74, slideMaxPct: 89, durationMultiplier: 0.95 },
+      { style: "steady", depth: "middle", slideMinPct: 50, slideMaxPct: 72, durationMultiplier: 0.75 },
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 98, durationMultiplier: 0.55 },
+      { style: "gentle", depth: "shallow", slideMinPct: 68, slideMaxPct: 85, durationMultiplier: 0.9 },
+      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 66, durationMultiplier: 0.6 }
+    ];
+    return cycle[step % cycle.length];
+  }
+
   if (name === "edging_ramp") {
     const cycle = [
+      ["tease", "shallow"],
       ["gentle", "middle"],
-      ["brisk", "middle"],
-      ["normal", "full"],
-      ["hard", "full"],
+      ["steady", "full"],
+      ["brisk", "full"],
+      ["hard", "deep"],
       ["gentle", "middle"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
-  if (name === "pulse_bursts") {
+  if (name === "edger") {
     const cycle = [
+      ["gentle", "shallow"],
+      ["steady", "middle"],
+      ["brisk", "full"],
       ["hard", "full"],
-      ["intense", "deep"],
-      ["hard", "full"],
-      ["normal", "middle"]
+      ["gentle", "shallow"],
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
+    ];
+    const frame = cycle[step % cycle.length];
+    if (Array.isArray(frame)) {
+      const [style, depth] = frame;
+      return { style, depth };
+    }
+    return frame;
+  }
+
+  if (name === "doubletap") {
+    const cycle = [
+      ["steady", "middle"],
+      { style: "hard", depth: "full", durationMultiplier: 0.6 },
+      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
+      ["gentle", "middle"],
+      ["steady", "middle"],
+      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
+      ["gentle", "shallow"]
+    ];
+    const frame = cycle[step % cycle.length];
+    if (Array.isArray(frame)) {
+      const [style, depth] = frame;
+      return { style, depth };
+    }
+    return frame;
+  }
+
+  if (name === "pendulum") {
+    const cycle = [
+      ["gentle", "shallow"],
+      ["steady", "middle"],
+      ["brisk", "full"],
+      ["steady", "middle"],
+      ["gentle", "shallow"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
+  }
+
+  if (name === "tremor") {
+    const cycle = [
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
+      { style: "brisk", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
+      { style: "hard", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
+      { style: "gentle", depth: "shallow", slideMinPct: 78, slideMaxPct: 88 },
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
+    ];
+    return cycle[step % cycle.length];
+  }
+
+  if (name === "pulse_bursts") {
+    const cycle = [
+      { style: "hard", depth: "full", slideMinPct: 12, slideMaxPct: 46, durationMultiplier: 0.55 },
+      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 24, durationMultiplier: 0.45 },
+      { style: "gentle", depth: "middle", slideMinPct: 38, slideMaxPct: 64, durationMultiplier: 0.8 },
+      { style: "steady", depth: "shallow", slideMinPct: 64, slideMaxPct: 84, durationMultiplier: 0.7 }
+    ];
+    return cycle[step % cycle.length];
   }
 
   if (name === "depth_ladder") {
     const cycle = [
-      ["normal", "tip"],
-      ["normal", "middle"],
-      ["hard", "full"],
-      ["normal", "middle"]
+      { style: "steady", depth: "deep", slideMinPct: 0, slideMaxPct: 22 },
+      { style: "steady", depth: "full", slideMinPct: 22, slideMaxPct: 42 },
+      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 58 },
+      { style: "hard", depth: "shallow", slideMinPct: 58, slideMaxPct: 74 },
+      { style: "steady", depth: "tip", slideMinPct: 74, slideMaxPct: 90 }
     ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
+    return cycle[step % cycle.length];
   }
 
   if (name === "stutter_break") {
-    if (step % 5 === 4) return { style: "gentle", depth: "middle" };
-    return { style: "hard", depth: "full" };
+    const cycle = [
+      { style: "hard", depth: "full" },
+      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
+      { style: "hard", depth: "deep" },
+      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
+      { style: "gentle", depth: "middle", durationMultiplier: 0.5 }
+    ];
+    return cycle[step % cycle.length];
   }
 
   if (name === "climax_window") {
     const cycle = [
       ["hard", "full"],
       ["intense", "deep"],
-      ["intense", "deep"],
-      ["hard", "full"],
-      ["brisk", "middle"]
+      ["hard", "deep"],
+      ["brisk", "full"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
-  const styles = ["gentle", "brisk", "normal", "hard", "intense"];
-  const depths = ["tip", "middle", "full", "deep"];
+  const styles = ["steady", "brisk", "hard"];
+  const depths = ["shallow", "middle", "full", "deep"];
   return {
     style: styles[Math.floor(Math.random() * styles.length)],
     depth: depths[Math.floor(Math.random() * depths.length)]
@@ -604,10 +688,14 @@ async function runPatternFrame(trigger) {
   const controller = getActiveController(motionConfig);
   const frame = nextPatternFrame(trigger.pattern, patternState.step);
   const rawMotion = {
+    ...frame,
     style: frame.style,
     depth: frame.depth,
     speed: trigger.speed,
-    durationMs: Math.max(300, Math.round(trigger.intervalMs * 0.95))
+    durationMs: Math.max(
+      300,
+      Math.round(trigger.intervalMs * 0.95 * Math.max(0.25, Number(frame.durationMultiplier) || 1))
+    )
   };
   const runMotion = applySafeModeToMotion(rawMotion, motionConfig);
   // eslint-disable-next-line no-console
@@ -653,7 +741,7 @@ async function startPatternRunner(trigger, options = {}) {
         stopPatternRunner();
         const fallbackMotion = applySafeModeToMotion(
           {
-            style: "normal",
+            style: "steady",
             depth: "middle",
             speed: Math.max(0.35, Math.min(0.65, trigger.speed ?? 0.55)),
             durationMs: 5000
@@ -666,7 +754,7 @@ async function startPatternRunner(trigger, options = {}) {
           holdUntilNextCommand: true
         });
         // eslint-disable-next-line no-console
-        console.log(`[pattern] auto ${trigger.pattern} ended; fallback to normal/middle hold`);
+        console.log(`[pattern] auto ${trigger.pattern} ended; fallback to steady/middle hold`);
         return;
       }
       patternState.step = 0;
@@ -823,6 +911,17 @@ app.post("/motion", async (req, res) => {
   if (!text.trim()) {
     return res.status(400).json({ error: "Missing text" });
   }
+  if (isIgnoredSystemImagePrompt(text)) {
+    // eslint-disable-next-line no-console
+    console.log("[motion] ignored system image prompt");
+    return res.json({
+      accepted: true,
+      simulated: !enabled,
+      skipped: true,
+      reason: "Ignored system image prompt",
+      continuedPreviousMotion: true
+    });
+  }
   logMotionDebug(text);
   const controller = getActiveController(motionConfig);
 
@@ -952,6 +1051,15 @@ app.post("/preview-motion", (req, res) => {
   const text = String(req.body?.text ?? "");
   if (!text.trim()) {
     return res.status(400).json({ error: "Missing text" });
+  }
+  if (isIgnoredSystemImagePrompt(text)) {
+    return res.json({
+      accepted: true,
+      simulated: true,
+      skipped: true,
+      reason: "Ignored system image prompt",
+      strictMotionTag: strictMotionTagRuntime
+    });
   }
   logMotionDebug(text);
 
@@ -1122,6 +1230,11 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
   process.stdin.on("data", async (chunk) => {
     const text = chunk.trim();
     if (!text) return;
+    if (isIgnoredSystemImagePrompt(text)) {
+      // eslint-disable-next-line no-console
+      console.log("[stdin] ignored system image prompt");
+      return;
+    }
 
     let patternTrigger = null;
     try {

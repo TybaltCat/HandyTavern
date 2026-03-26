@@ -6,7 +6,9 @@ import { performance } from "node:perf_hooks";
 
 // Tune how much each parsed depth scales intensity.
 const DEPTH_INTENSITY_MULTIPLIER = {
-  tip: 0.75,
+  base: 0.6,
+  tip: 0.78,
+  shallow: 0.86,
   middle: 0.9,
   full: 1.0,
   deep: 1.1
@@ -47,11 +49,13 @@ function summarizeIntervals(samples) {
 }
 
 function depthToNormalizedStroke(depth) {
-  // Tune depth-to-stroke mapping here (0 = shallow, 1 = deepest position).
-  if (depth === "tip") return 0.15;
-  if (depth === "middle") return 0.5;
-  if (depth === "full") return 0.85;
-  return 1.0;
+  // Tune depth-to-stroke mapping here (0 = deepest position, 1 = tip/outside).
+  if (depth === "base") return 0.04;
+  if (depth === "tip") return 0.96;
+  if (depth === "shallow") return 0.8;
+  if (depth === "middle") return 0.56;
+  if (depth === "full") return 0.32;
+  return 0.14;
 }
 
 function getMotionStrokeOverride01(motion = {}) {
@@ -503,7 +507,9 @@ export class HandyController {
       Math.round(560 * Math.pow(0.03, remappedNormalizedSpeed))
     );
     const styleHalfCycleFactor = {
+      tease: 1.75,
       gentle: 1.45,
+      steady: 1.0,
       normal: 1.0,
       brisk: 0.82,
       hard: 0.66,

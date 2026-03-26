@@ -30,7 +30,9 @@ const DEFAULTS = {
   cumStrokePct: 90,
   cumSpeedPct: 75,
   cumDurationMs: 6000,
+  testSpeedTeasePct: 10,
   testSpeedGentlePct: 20,
+  testSpeedSteadyPct: 40,
   testSpeedBriskPct: 55,
   testSpeedNormalPct: 40,
   testSpeedHardPct: 65,
@@ -100,6 +102,12 @@ if (Number(settings.testSpeedBriskPct) === 40 && Number(settings.testSpeedNormal
   settings.testSpeedBriskPct = 55;
   settings.testSpeedNormalPct = 40;
 }
+if (settings.testSpeedSteadyPct === undefined || settings.testSpeedSteadyPct === null || settings.testSpeedSteadyPct === "") {
+  settings.testSpeedSteadyPct = Number(settings.testSpeedNormalPct) || 40;
+}
+if (settings.testSpeedTeasePct === undefined || settings.testSpeedTeasePct === null || settings.testSpeedTeasePct === "") {
+  settings.testSpeedTeasePct = 10;
+}
 if (Number(settings.testSpeedHardPct) >= Number(settings.testSpeedIntensePct)) {
   settings.testSpeedIntensePct = Math.min(100, Number(settings.testSpeedHardPct) + 15);
 }
@@ -118,7 +126,9 @@ normalizePercentSetting("speedMin");
 normalizePercentSetting("speedMax");
 normalizePercentSetting("minimumAllowedStroke");
 normalizePercentSetting("safeMaxSpeed");
+normalizePercentSetting("testSpeedTeasePct");
 normalizePercentSetting("testSpeedGentlePct");
+normalizePercentSetting("testSpeedSteadyPct");
 normalizePercentSetting("testSpeedBriskPct");
 normalizePercentSetting("testSpeedNormalPct");
 normalizePercentSetting("testSpeedHardPct");
@@ -151,7 +161,7 @@ let setupStateEl = null;
 let setupHintEl = null;
 let panelRetryHandle = null;
 let testModeActive = false;
-let testModeStyle = "normal";
+let testModeStyle = "steady";
 let testModeDepth = "middle";
 let preTestHoldSetting = null;
 let patternIntervalHandle = null;
@@ -360,9 +370,10 @@ function updateGlobalSpeedSlider(panel) {
 
 function cumDepthFromStrokePct(raw) {
   const pct = clampPercent(raw);
-  if (pct < 25) return "tip";
-  if (pct < 50) return "middle";
-  if (pct < 75) return "full";
+  if (pct < 20) return "tip";
+  if (pct < 40) return "shallow";
+  if (pct < 60) return "middle";
+  if (pct < 80) return "full";
   return "deep";
 }
 
@@ -748,7 +759,9 @@ function onInputChange(event) {
       "speedMax",
       "minimumAllowedStroke",
       "safeMaxSpeed",
+      "testSpeedTeasePct",
       "testSpeedGentlePct",
+      "testSpeedSteadyPct",
       "testSpeedBriskPct",
       "testSpeedNormalPct",
       "testSpeedHardPct",
@@ -837,7 +850,9 @@ function onInputChange(event) {
     "minimumAllowedStroke",
     "speedMin",
     "speedMax",
+    "testSpeedTeasePct",
     "testSpeedGentlePct",
+    "testSpeedSteadyPct",
     "testSpeedBriskPct",
     "testSpeedNormalPct",
     "testSpeedHardPct",
@@ -932,12 +947,12 @@ async function togglePause() {
     return;
   }
   try {
-    const resumeSpeed = currentStyleSpeed("normal");
-    const resumeTag = `[motion: style=normal speed=${resumeSpeed} depth=middle duration=3s]`;
+    const resumeSpeed = currentStyleSpeed("steady");
+    const resumeTag = `[motion: style=steady speed=${resumeSpeed} depth=middle duration=3s]`;
     const payload = { text: resumeTag };
     await postJson("/motion", payload);
     markNonCumMotionPayload(payload);
-    setStatus(`Resumed: normal/middle @ ${resumeSpeed}`);
+    setStatus(`Resumed: steady/middle @ ${resumeSpeed}`);
   } catch (error) {
     setStatus(`Resume error: ${error.message}`);
   }
@@ -957,8 +972,9 @@ async function handleParkHold() {
 
 function cumStyleFromSpeedPct(rawSpeedPct) {
   const speed = clampPercent(rawSpeedPct);
+  if (speed < 18) return "tease";
   if (speed < 30) return "gentle";
-  if (speed < 50) return "normal";
+  if (speed < 50) return "steady";
   if (speed < 65) return "brisk";
   if (speed < 80) return "hard";
   return "intense";
@@ -972,7 +988,7 @@ async function handleCumAction() {
   if (cumOverrideActive) {
     const restore = cloneMotionPayload(cumRestorePayload)
       || cloneMotionPayload(lastNonCumMotionPayload)
-      || { text: `[motion: style=normal speed=${currentStyleSpeed("normal")} depth=middle duration=3s]` };
+      || { text: `[motion: style=steady speed=${currentStyleSpeed("steady")} depth=middle duration=3s]` };
     try {
       stopPatternMode(false);
       await postJson("/motion", restore);
@@ -1035,13 +1051,17 @@ function stopPatternMode(updateStatus = true) {
 
 function patternCycleSteps(name) {
   if (name === "wave") return 8;
-  if (name === "pulse") return 6;
-  if (name === "ramp") return 5;
+  if (name === "pulse") return 4;
+  if (name === "ramp") return 6;
   if (name === "tease_hold") return 4;
-  if (name === "edging_ramp") return 5;
+  if (name === "edging_ramp") return 6;
+  if (name === "edger") return 6;
+  if (name === "doubletap") return 7;
+  if (name === "pendulum") return 5;
+  if (name === "tremor") return 6;
   if (name === "pulse_bursts") return 4;
-  if (name === "depth_ladder") return 4;
-  if (name === "stutter_break") return 6;
+  if (name === "depth_ladder") return 5;
+  if (name === "stutter_break") return 5;
   if (name === "climax_window") return 4;
   return 6;
 }
@@ -1049,12 +1069,15 @@ function patternCycleSteps(name) {
 function patternCycleTargetMs(name, baseCycleMs) {
   if (name === "wave") return Math.round(baseCycleMs * 1.5);
   if (name === "ramp") return Math.round(baseCycleMs * 1.35);
+  if (name === "pendulum") return Math.round(baseCycleMs * 1.4);
+  if (name === "doubletap") return Math.round(baseCycleMs * 0.9);
+  if (name === "tremor") return Math.round(baseCycleMs * 0.8);
   return baseCycleMs;
 }
 
 function patternStepSpan(name, step) {
   if (name === "stutter_break") {
-    const phase = step % 3;
+    const phase = step % 4;
     if (phase === 0) return 3;
     if (phase === 1) return 2;
     return 1;
@@ -1071,58 +1094,130 @@ function patternStepDelayMs(baseIntervalMs) {
 function nextPatternFrame(name, step) {
   if (name === "wave") {
     const cycle = [
-      ["gentle", "middle"],
+      ["gentle", "shallow"],
+      ["steady", "middle"],
       ["brisk", "middle"],
-      ["normal", "middle"],
       ["hard", "full"],
       ["intense", "deep"],
       ["hard", "full"],
-      ["normal", "middle"],
-      ["brisk", "middle"]
+      ["brisk", "middle"],
+      ["steady", "shallow"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
   if (name === "pulse") {
-    if (step % 6 === 5) return { style: "gentle", depth: "deep", speedPct: 20 };
-    return { style: "normal", depth: "middle" };
+    const cycle = [
+      { style: "steady", depth: "middle" },
+      { style: "steady", depth: "middle" },
+      { style: "hard", depth: "full" },
+      { style: "gentle", depth: "deep", speedPct: 20 }
+    ];
+    return cycle[step % cycle.length];
   }
 
   if (name === "ramp") {
-    const cycle = ["gentle", "normal", "brisk", "hard", "intense"];
-    return { style: cycle[step % cycle.length], depth: "middle" };
+    const cycle = [
+      ["tease", "shallow"],
+      ["gentle", "middle"],
+      ["steady", "middle"],
+      ["brisk", "full"],
+      ["hard", "deep"],
+      ["intense", "deep"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
   }
 
   if (name === "tease_hold") {
     const cycle = [
-      ["gentle", "tip"],
-      ["gentle", "tip"],
-      ["normal", "tip"],
-      ["gentle", "tip"]
+      { style: "tease", depth: "tip", slideMinPct: 80, slideMaxPct: 96 },
+      { style: "gentle", depth: "tip", slideMinPct: 82, slideMaxPct: 95 },
+      { style: "tease", depth: "shallow", slideMinPct: 76, slideMaxPct: 91 },
+      { style: "gentle", depth: "tip", slideMinPct: 84, slideMaxPct: 97 }
     ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth, slideMinPct: 80, slideMaxPct: 95 };
+    return cycle[step % cycle.length];
   }
 
   if (name === "edging_ramp") {
     const cycle = [
+      ["tease", "shallow"],
       ["gentle", "middle"],
-      ["brisk", "middle"],
-      ["normal", "full"],
-      ["hard", "full"],
+      ["steady", "full"],
+      ["brisk", "full"],
+      ["hard", "deep"],
       ["gentle", "middle"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
+  if (name === "edger") {
+    const cycle = [
+      ["gentle", "shallow"],
+      ["steady", "middle"],
+      ["brisk", "full"],
+      ["hard", "full"],
+      ["gentle", "shallow"],
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
+    ];
+    const frame = cycle[step % cycle.length];
+    if (Array.isArray(frame)) {
+      const [style, depth] = frame;
+      return { style, depth };
+    }
+    return frame;
+  }
+
+  if (name === "doubletap") {
+    const cycle = [
+      ["steady", "middle"],
+      { style: "hard", depth: "full", durationMultiplier: 0.6 },
+      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
+      ["gentle", "middle"],
+      ["steady", "middle"],
+      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
+      ["gentle", "shallow"]
+    ];
+    const frame = cycle[step % cycle.length];
+    if (Array.isArray(frame)) {
+      const [style, depth] = frame;
+      return { style, depth };
+    }
+    return frame;
+  }
+
+  if (name === "pendulum") {
+    const cycle = [
+      ["gentle", "shallow"],
+      ["steady", "middle"],
+      ["brisk", "full"],
+      ["steady", "middle"],
+      ["gentle", "shallow"]
+    ];
+    const [style, depth] = cycle[step % cycle.length];
+    return { style, depth };
+  }
+
+  if (name === "tremor") {
+    const cycle = [
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
+      { style: "brisk", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
+      { style: "hard", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
+      { style: "gentle", depth: "shallow", slideMinPct: 78, slideMaxPct: 88 },
+      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
+    ];
+    return cycle[step % cycle.length];
+  }
+
   if (name === "pulse_bursts") {
     const cycle = [
       ["hard", "full"],
       ["intense", "deep"],
-      ["hard", "full"],
-      ["gentle", "middle"]
+      ["gentle", "middle"],
+      ["steady", "middle"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
@@ -1130,33 +1225,39 @@ function nextPatternFrame(name, step) {
 
   if (name === "depth_ladder") {
     const cycle = [
-      { style: "normal", depth: "tip", slideMinPct: 0, slideMaxPct: 35 },
-      { style: "normal", depth: "middle", slideMinPct: 35, slideMaxPct: 50 },
-      { style: "hard", depth: "full", slideMinPct: 50, slideMaxPct: 60 },
-      { style: "normal", depth: "full", slideMinPct: 60, slideMaxPct: 75 }
+      { style: "steady", depth: "deep", slideMinPct: 0, slideMaxPct: 22 },
+      { style: "steady", depth: "full", slideMinPct: 22, slideMaxPct: 42 },
+      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 58 },
+      { style: "hard", depth: "shallow", slideMinPct: 58, slideMaxPct: 74 },
+      { style: "steady", depth: "tip", slideMinPct: 74, slideMaxPct: 90 }
     ];
     return cycle[step % cycle.length];
   }
 
   if (name === "stutter_break") {
-    if (step % 3 === 1) return { style: "intense", depth: "tip", slideMinPct: 0, slideMaxPct: 20 };
-    if (step % 3 === 2) return { style: "gentle", depth: "middle" };
-    return { style: "hard", depth: "full" };
+    const cycle = [
+      { style: "hard", depth: "full" },
+      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
+      { style: "hard", depth: "deep" },
+      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
+      { style: "gentle", depth: "middle", durationMultiplier: 0.5 }
+    ];
+    return cycle[step % cycle.length];
   }
 
   if (name === "climax_window") {
     const cycle = [
       ["hard", "full"],
       ["intense", "deep"],
-      ["hard", "full"],
-      ["brisk", "middle"]
+      ["hard", "deep"],
+      ["brisk", "full"]
     ];
     const [style, depth] = cycle[step % cycle.length];
     return { style, depth };
   }
 
-  const styles = ["normal", "brisk", "hard"];
-  const depths = ["middle", "full", "deep"];
+  const styles = ["steady", "brisk", "hard"];
+  const depths = ["shallow", "middle", "full", "deep"];
   return {
     style: styles[Math.floor(Math.random() * styles.length)],
     depth: depths[Math.floor(Math.random() * depths.length)]
@@ -1195,14 +1296,21 @@ async function startPatternMode(name) {
     const overlapMs = 600;
     return Math.max(3, Number(((delayMs + overlapMs) / 1000).toFixed(2)));
   };
-  await tick(durationForDelayMs(intervalMs * patternStepSpan(name, patternStep)));
+  const frameDurationSec = (delayMs, frame) =>
+    durationForDelayMs(delayMs * Math.max(0.25, Number(frame?.durationMultiplier) || 1));
+  await tick(
+    frameDurationSec(
+      intervalMs * patternStepSpan(name, patternStep),
+      nextPatternFrame(name, patternStep)
+    )
+  );
   const scheduleNext = () => {
     if (runToken !== patternRunToken) return;
     const delayMs = patternStepDelayMs(intervalMs * patternStepSpan(name, patternStep));
     patternIntervalHandle = setTimeout(async () => {
       if (runToken !== patternRunToken) return;
       patternStep += 1;
-      await tick(durationForDelayMs(delayMs));
+      await tick(frameDurationSec(delayMs, nextPatternFrame(name, patternStep)));
       scheduleNext();
     }, delayMs);
   };
@@ -1236,11 +1344,13 @@ async function handleTestMotion() {
 }
 
 function speedSettingKeyForStyle(style) {
+  if (style === "tease") return "testSpeedTeasePct";
   if (style === "gentle") return "testSpeedGentlePct";
+  if (style === "steady" || style === "normal") return "testSpeedSteadyPct";
   if (style === "brisk") return "testSpeedBriskPct";
   if (style === "hard") return "testSpeedHardPct";
   if (style === "intense") return "testSpeedIntensePct";
-  return "testSpeedNormalPct";
+  return "testSpeedSteadyPct";
 }
 
 function styleSpeedInputId(style) {
@@ -1430,6 +1540,14 @@ function renderSettingsPanel() {
         <input type="number" step="500" min="3000" max="120000" name="patternIntervalMs" value="${settings.patternIntervalMs}" />
       </div>
       <div class="tavernplug-row">
+        <label>Tease Speed %</label>
+        <div class="tavernplug-inline">
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-tease-down">-10</button>
+          <input id="${styleSpeedInputId("tease")}" type="number" step="1" min="0" max="100" name="testSpeedTeasePct" value="${settings.testSpeedTeasePct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-tease-up">+10</button>
+        </div>
+      </div>
+      <div class="tavernplug-row">
         <label>Gentle Speed %</label>
         <div class="tavernplug-inline">
           <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-gentle-down">-10</button>
@@ -1438,11 +1556,11 @@ function renderSettingsPanel() {
         </div>
       </div>
       <div class="tavernplug-row">
-        <label>Normal Speed %</label>
+        <label>Steady Speed %</label>
         <div class="tavernplug-inline">
-          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-down">-10</button>
-          <input id="${styleSpeedInputId("normal")}" type="number" step="1" min="0" max="100" name="testSpeedNormalPct" value="${settings.testSpeedNormalPct}" />
-          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-normal-up">+10</button>
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-steady-down">-10</button>
+          <input id="${styleSpeedInputId("steady")}" type="number" step="1" min="0" max="100" name="testSpeedSteadyPct" value="${settings.testSpeedSteadyPct}" />
+          <button class="menu_button tavernplug-step-btn" type="button" id="${EXTENSION_NAME}-steady-up">+10</button>
         </div>
       </div>
       <div class="tavernplug-row">
@@ -1538,8 +1656,9 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-actions">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-test">Test Mode Start</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-tease">Tease</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-gentle">Gentle</button>
-      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-normal">Normal</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-steady">Steady</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-brisk">Brisk</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-hard">Hard</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-mode-intense">Intense</button>
@@ -1551,6 +1670,10 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-random">Random</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-tease">Tease</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-edging">Edging</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-edger">Edger</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-doubletap">Doubletap</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-pendulum">Pendulum</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-tremor">Tremor</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-burst">Burst</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-ladder">Ladder</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-pattern-stutter">Stutter</button>
@@ -1559,6 +1682,7 @@ function renderSettingsPanel() {
     </div>
     <div class="tavernplug-actions" data-ui-mode="advanced">
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-tip">Tip</button>
+      <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-shallow">Shallow</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-middle">Middle</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-full">Full</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
@@ -1596,7 +1720,7 @@ function renderSettingsPanel() {
   bindClick("ui-basic", () => { setUiMode("basic"); });
   bindClick("ui-advanced", () => { setUiMode("advanced"); });
 
-  const modeButtons = ["gentle", "brisk", "normal", "hard", "intense"];
+  const modeButtons = ["tease", "gentle", "steady", "brisk", "hard", "intense"];
   modeButtons.forEach((style) => {
     bindClick(`mode-${style}`, () => {
       stopPatternMode(false);
@@ -1617,6 +1741,10 @@ function renderSettingsPanel() {
     ["random", "random"],
     ["tease", "tease_hold"],
     ["edging", "edging_ramp"],
+    ["edger", "edger"],
+    ["doubletap", "doubletap"],
+    ["pendulum", "pendulum"],
+    ["tremor", "tremor"],
     ["burst", "pulse_bursts"],
     ["ladder", "depth_ladder"],
     ["stutter", "stutter_break"],
@@ -1631,7 +1759,7 @@ function renderSettingsPanel() {
     stopPatternMode();
   });
 
-  ["tip", "middle", "full", "deep"].forEach((depth) => {
+  ["tip", "shallow", "middle", "full", "deep"].forEach((depth) => {
     bindClick(`depth-${depth}`, () => {
       stopPatternMode(false);
       void sendModeTest(testModeStyle, depth);
