@@ -58,6 +58,7 @@ const LOCKED_TECHNICAL_DEFAULTS = {
   handyNativeMaxPct: 75
 };
 const LOCKED_CONTROLLER_MODE = "handy-native";
+const HEALTH_POLL_INTERVAL_MS = 30000;
 
 function applyLockedTechnicalSettings(target) {
   target.invertStroke = LOCKED_TECHNICAL_DEFAULTS.invertStroke;
@@ -980,6 +981,57 @@ function cumStyleFromSpeedPct(rawSpeedPct) {
   return "intense";
 }
 
+function pickRandom(items) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+  return items[Math.floor(Math.random() * items.length)] ?? null;
+}
+
+async function handleRandomAction() {
+  if (settings.paused) {
+    setStatus("Paused: random action blocked");
+    return;
+  }
+
+  const randomPatterns = [
+    "wave",
+    "pulse",
+    "ramp",
+    "pendulum",
+    "edging_ramp",
+    "tremor",
+    "pulse_bursts",
+    "depth_ladder",
+    "tease_hold"
+  ];
+  const randomModes = ["motion", "motion", "pattern"];
+  const mode = pickRandom(randomModes);
+
+  if (mode === "pattern") {
+    const patternName = pickRandom(randomPatterns);
+    if (!patternName) {
+      setStatus("Random action error: no pattern available");
+      return;
+    }
+    await startPatternMode(patternName);
+    return;
+  }
+
+  const styles = ["tease", "gentle", "steady", "brisk", "hard", "intense"];
+  const depths = ["tip", "shallow", "middle", "full", "deep"];
+  const durations = [2.5, 3, 3.5, 4.2, 5];
+  const style = pickRandom(styles) ?? "steady";
+  const depth = pickRandom(depths) ?? "middle";
+  const durationSec = pickRandom(durations) ?? 3;
+
+  try {
+    stopPatternMode(false);
+    await sendModeTest(style, depth, {}, durationSec);
+    setStatus(`Random action: ${style}/${depth} for ${durationSec}s`);
+  } catch (error) {
+    setStatus(`Random action error: ${error.message}`);
+  }
+}
+
 async function handleCumAction() {
   if (settings.paused) {
     setStatus("Paused: cum action blocked");
@@ -1848,45 +1900,87 @@ function ensurePanelMounted() {
 }
 
 function mountQuickStopButton() {
-  if (
-    document.querySelector(`#${EXTENSION_NAME}-quick-pause`)
-    && document.querySelector(`#${EXTENSION_NAME}-quick-cum`)
-  ) return true;
+  const existingPauseButton = document.querySelector(`#${EXTENSION_NAME}-quick-pause`);
+  const existingCumButton = document.querySelector(`#${EXTENSION_NAME}-quick-cum`);
+  const existingRandomButton = document.querySelector(`#${EXTENSION_NAME}-quick-random`);
+  if (existingPauseButton && existingCumButton && existingRandomButton) return true;
 
-  const cumButton = document.createElement("button");
-  cumButton.id = `${EXTENSION_NAME}-quick-cum`;
-  cumButton.type = "button";
-  cumButton.className = "menu_button tavernplug-quick-cum";
-  cumButton.textContent = "Cum";
-  cumButton.title = "Run user-configured cum action";
-  cumButton.addEventListener("click", () => {
-    void handleCumAction();
-  });
+  const cumButton = existingCumButton ?? document.createElement("button");
+  if (!existingCumButton) {
+    cumButton.id = `${EXTENSION_NAME}-quick-cum`;
+    cumButton.type = "button";
+    cumButton.className = "menu_button tavernplug-quick-cum";
+    cumButton.textContent = "Cum";
+    cumButton.title = "Run user-configured cum action";
+    cumButton.addEventListener("click", () => {
+      void handleCumAction();
+    });
+  }
 
-  const pauseButton = document.createElement("button");
-  pauseButton.id = `${EXTENSION_NAME}-quick-pause`;
-  pauseButton.type = "button";
-  pauseButton.className = "menu_button tavernplug-quick-pause";
-  pauseButton.textContent = settings.paused ? "Resume" : "Pause";
-  pauseButton.title = "Pause/resume all TavernPlug motion actions";
-  pauseButton.addEventListener("click", () => {
-    void togglePause();
-  });
+  const pauseButton = existingPauseButton ?? document.createElement("button");
+  if (!existingPauseButton) {
+    pauseButton.id = `${EXTENSION_NAME}-quick-pause`;
+    pauseButton.type = "button";
+    pauseButton.className = "menu_button tavernplug-quick-pause";
+    pauseButton.textContent = settings.paused ? "Resume" : "Pause";
+    pauseButton.title = "Pause/resume all TavernPlug motion actions";
+    pauseButton.addEventListener("click", () => {
+      void togglePause();
+    });
+  }
 
-  const container = findQuickStopContainer();
+  const randomButton = existingRandomButton ?? document.createElement("button");
+  if (!existingRandomButton) {
+    randomButton.id = `${EXTENSION_NAME}-quick-random`;
+    randomButton.type = "button";
+    randomButton.className = "menu_button tavernplug-quick-random";
+    randomButton.textContent = "Rnd";
+    randomButton.title = "Trigger a random motion or pattern";
+    randomButton.addEventListener("click", () => {
+      void handleRandomAction();
+    });
+  }
+
+  const existingInlineContainer =
+    (existingPauseButton?.parentElement && existingPauseButton.parentElement === existingCumButton?.parentElement)
+      ? existingPauseButton.parentElement
+      : null;
+  const container = existingInlineContainer || findQuickStopContainer();
   if (container) {
     pauseButton.classList.add("tavernplug-quick-stop-inline");
     cumButton.classList.add("tavernplug-quick-stop-inline");
-    container.append(pauseButton);
-    container.append(cumButton);
+    randomButton.classList.add("tavernplug-quick-stop-inline");
+    if (!pauseButton.isConnected) {
+      container.append(pauseButton);
+    }
+    if (!randomButton.isConnected) {
+      if (cumButton.isConnected && cumButton.parentElement === container) {
+        container.insertBefore(randomButton, cumButton);
+      } else if (pauseButton.isConnected && pauseButton.parentElement === container && pauseButton.nextSibling) {
+        container.insertBefore(randomButton, pauseButton.nextSibling);
+      } else {
+        container.append(randomButton);
+      }
+    }
+    if (!cumButton.isConnected) {
+      container.append(cumButton);
+    }
     updateQuickPauseButton();
     return true;
   }
 
   pauseButton.classList.add("tavernplug-quick-pause-floating");
+  randomButton.classList.add("tavernplug-quick-random-floating");
   cumButton.classList.add("tavernplug-quick-cum-floating");
-  document.body.append(pauseButton);
-  document.body.append(cumButton);
+  if (!pauseButton.isConnected) {
+    document.body.append(pauseButton);
+  }
+  if (!randomButton.isConnected) {
+    document.body.append(randomButton);
+  }
+  if (!cumButton.isConnected) {
+    document.body.append(cumButton);
+  }
   updateQuickPauseButton();
   return true;
 }
@@ -1965,7 +2059,7 @@ function startHealthPolling() {
   };
   healthHandle = setInterval(() => {
     void run();
-  }, 12000);
+  }, HEALTH_POLL_INTERVAL_MS);
   void run();
 }
 

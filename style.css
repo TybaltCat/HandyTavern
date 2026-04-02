@@ -395,6 +395,12 @@
   color: #fff;
 }
 
+.tavernplug-quick-random {
+  background: #245f95;
+  border-color: #245f95;
+  color: #fff;
+}
+
 .tavernplug-quick-pause-on {
   background: #2f7d32;
   border-color: #2f7d32;
@@ -423,6 +429,17 @@
   right: 14px;
   bottom: 94px;
   z-index: 9999;
+}
+
+.tavernplug-quick-random-floating {
+  position: fixed;
+  right: 14px;
+  bottom: 54px;
+  z-index: 9999;
+}
+
+.tavernplug-quick-cum-floating {
+  bottom: 14px;
 }
 
 .tavernplug-status {

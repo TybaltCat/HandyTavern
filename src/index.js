@@ -68,7 +68,8 @@ const patternState = {
   step: 0,
   intervalHandle: null,
   stopHandle: null,
-  frameBusy: false
+  frameBusy: false,
+  runToken: 0
 };
 let motionRunToken = 0;
 let lastMotionCommandAt = 0;
@@ -670,6 +671,7 @@ function nextPatternFrame(name, step) {
 }
 
 function stopPatternRunner() {
+  patternState.runToken += 1;
   if (patternState.intervalHandle) {
     clearInterval(patternState.intervalHandle);
     patternState.intervalHandle = null;
@@ -684,9 +686,9 @@ function stopPatternRunner() {
   patternState.frameBusy = false;
 }
 
-async function runPatternFrame(trigger) {
+async function runPatternFrame(trigger, step) {
   const controller = getActiveController(motionConfig);
-  const frame = nextPatternFrame(trigger.pattern, patternState.step);
+  const frame = nextPatternFrame(trigger.pattern, step);
   const rawMotion = {
     ...frame,
     style: frame.style,
@@ -700,16 +702,17 @@ async function runPatternFrame(trigger) {
   const runMotion = applySafeModeToMotion(rawMotion, motionConfig);
   // eslint-disable-next-line no-console
   console.log(
-    `[pattern] frame pattern=${trigger.pattern} step=${patternState.step} style=${runMotion.style} depth=${runMotion.depth} speed=${runMotion.speed.toFixed(3)} durationMs=${runMotion.durationMs}`
+    `[pattern] frame pattern=${trigger.pattern} step=${step} style=${runMotion.style} depth=${runMotion.depth} speed=${runMotion.speed.toFixed(3)} durationMs=${runMotion.durationMs}`
   );
   await controller.runMotion(runMotion, motionConfig, {
     stopPreviousOnNewMotion: true,
-    holdUntilNextCommand: false
+    holdUntilNextCommand: true
   });
 }
 
 async function startPatternRunner(trigger, options = {}) {
   stopPatternRunner();
+  const runToken = ++patternState.runToken;
   patternState.active = true;
   patternState.name = trigger.pattern;
   patternState.step = 0;
@@ -719,24 +722,29 @@ async function startPatternRunner(trigger, options = {}) {
   const repeatWindows = options.repeatWindows ?? true;
 
   const tick = async () => {
-    if (!patternState.active || patternState.frameBusy) return;
+    if (!patternState.active || patternState.runToken !== runToken || patternState.frameBusy) return;
+    const step = patternState.step;
     patternState.frameBusy = true;
     try {
-      await runPatternFrame(trigger);
+      await runPatternFrame(trigger, step);
     } finally {
-      patternState.frameBusy = false;
+      if (patternState.runToken === runToken) {
+        patternState.frameBusy = false;
+      }
     }
   };
 
   await tick();
+  if (!patternState.active || patternState.runToken !== runToken) return;
   patternState.intervalHandle = setInterval(() => {
+    if (!patternState.active || patternState.runToken !== runToken) return;
     patternState.step += 1;
     void tick();
   }, intervalMs);
 
   const scheduleWindowReset = () => {
     patternState.stopHandle = setTimeout(() => {
-      if (!patternState.active) return;
+      if (!patternState.active || patternState.runToken !== runToken) return;
       if (!repeatWindows) {
         stopPatternRunner();
         const fallbackMotion = applySafeModeToMotion(
