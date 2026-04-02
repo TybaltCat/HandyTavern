@@ -377,9 +377,11 @@ async function loadPersistedMotionConfig() {
     const raw = await fs.readFile(CONFIG_FILE_PATH, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object") return;
+    const sanitizedPersisted = { ...parsed };
+    delete sanitizedPersisted.handyConnectionKey;
     motionConfig = sanitizeMotionConfig({
       ...motionConfig,
-      ...parsed
+      ...sanitizedPersisted
     });
     nativeController.setApiBaseUrl(motionConfig.handyApiBaseUrl);
     nativeController.setApiBaseUrlV3(motionConfig.handyV3ApiBaseUrl);
@@ -395,9 +397,13 @@ async function loadPersistedMotionConfig() {
 
 async function persistMotionConfig() {
   try {
+    const persistedConfig = {
+      ...motionConfig,
+      handyConnectionKey: ""
+    };
     await fs.writeFile(
       CONFIG_FILE_PATH,
-      `${JSON.stringify(motionConfig, null, 2)}\n`,
+      `${JSON.stringify(persistedConfig, null, 2)}\n`,
       "utf8"
     );
   } catch (error) {
