@@ -8,6 +8,10 @@ function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function lerp(start, end, t) {
+  return start + (end - start) * t;
+}
+
 function remapSpeed(speed, speedMin, speedMax) {
   const min = clamp01(speedMin);
   const max = clamp01(speedMax);
@@ -176,6 +180,7 @@ export class HandyNativeController {
     this.wrapperClient = null;
     this.wrapperInitTried = false;
     this.wrapperAvailable = false;
+    this.lastWrapperHampState = null;
   }
 
   setApiBaseUrl(url) {
@@ -743,6 +748,7 @@ export class HandyNativeController {
 
   async runHampMotion(motion, motionConfig = {}, options = {}) {
     const holdUntilNextCommand = options.holdUntilNextCommand ?? false;
+    const smoothTransition = options.smoothTransition ?? false;
     const sequence = ++this.motionSequence;
     const isCancelled = () => sequence !== this.motionSequence;
     await this.ensureDevice(10000, motionConfig);
@@ -774,18 +780,7 @@ export class HandyNativeController {
       try {
         if (isCancelled()) return;
         this.setWrapperConnectionKey(key);
-        let wrapperSlideApplied = false;
-        if (typeof this.wrapperClient.setSlideSettings === "function") {
-          // thehandy v2 endpoints are stricter with slide bounds/precision.
-          // Send integer percentages and enforce a minimal spread.
-          let slideMin = Math.max(0, Math.min(99, Math.round(minPct)));
-          let slideMax = Math.max(1, Math.min(100, Math.round(maxPct)));
-          if (slideMax <= slideMin) {
-            slideMax = Math.min(100, slideMin + 1);
-          }
-          await this.wrapperClient.setSlideSettings(slideMin, slideMax);
-          wrapperSlideApplied = true;
-        }
+        const wrapperSlideApplied = typeof this.wrapperClient.setSlideSettings === "function";
         if (isCancelled()) return;
         if (typeof this.wrapperClient.setHampStart === "function") {
           try {
@@ -798,13 +793,53 @@ export class HandyNativeController {
           }
         }
         if (isCancelled()) return;
-        if (typeof this.wrapperClient.setHampVelocity === "function") {
-          await this.wrapperClient.setHampVelocity(speedPct);
-        } else if (typeof this.wrapperClient.setSpeed === "function") {
-          await this.wrapperClient.setSpeed(speedPct);
-        } else {
-          throw new Error("thehandy wrapper missing HAMP speed method");
+        const targetWrapperState = {
+          speedPct,
+          slideMin: Math.max(0, Math.min(99, Math.round(minPct))),
+          slideMax: Math.max(1, Math.min(100, Math.round(maxPct)))
+        };
+        if (targetWrapperState.slideMax <= targetWrapperState.slideMin) {
+          targetWrapperState.slideMax = Math.min(100, targetWrapperState.slideMin + 1);
         }
+        const applyWrapperState = async (state) => {
+          if (typeof this.wrapperClient.setSlideSettings === "function") {
+            await this.wrapperClient.setSlideSettings(state.slideMin, state.slideMax);
+          }
+          if (typeof this.wrapperClient.setHampVelocity === "function") {
+            await this.wrapperClient.setHampVelocity(state.speedPct);
+          } else if (typeof this.wrapperClient.setSpeed === "function") {
+            await this.wrapperClient.setSpeed(state.speedPct);
+          } else {
+            throw new Error("thehandy wrapper missing HAMP speed method");
+          }
+        };
+        if (smoothTransition && holdUntilNextCommand) {
+          const processingBufferMs = 45;
+          const startState = this.lastWrapperHampState ?? targetWrapperState;
+          const steps = 3;
+          const totalBlendMs = this.lastWrapperHampState ? 180 : 90;
+          await sleep(processingBufferMs);
+          if (isCancelled()) return;
+          for (let i = 1; i <= steps; i += 1) {
+            if (isCancelled()) return;
+            const t = i / steps;
+            const intermediateState = {
+              speedPct: Math.max(1, Math.min(100, Math.round(lerp(startState.speedPct, targetWrapperState.speedPct, t)))),
+              slideMin: Math.max(0, Math.min(99, Math.round(lerp(startState.slideMin, targetWrapperState.slideMin, t)))),
+              slideMax: Math.max(1, Math.min(100, Math.round(lerp(startState.slideMax, targetWrapperState.slideMax, t))))
+            };
+            if (intermediateState.slideMax <= intermediateState.slideMin) {
+              intermediateState.slideMax = Math.min(100, intermediateState.slideMin + 1);
+            }
+            await applyWrapperState(intermediateState);
+            if (i < steps) {
+              await sleep(Math.round(totalBlendMs / steps));
+            }
+          }
+        } else {
+          await applyWrapperState(targetWrapperState);
+        }
+        this.lastWrapperHampState = targetWrapperState;
         // eslint-disable-next-line no-console
         console.log(`[native] cmd=thehandy.hamp speed=${speedPct}% slide=${Math.round(minPct)}%..${Math.round(maxPct)}%${wrapperSlideApplied ? "" : " (speed-only)"}`);
         if (!holdUntilNextCommand) {
@@ -817,6 +852,7 @@ export class HandyNativeController {
           if (typeof this.wrapperClient.setHampStop === "function") {
             await this.wrapperClient.setHampStop();
           }
+          this.lastWrapperHampState = null;
         }
         return;
       } catch (error) {
@@ -1011,6 +1047,7 @@ export class HandyNativeController {
 
   async parkAtZero(motionConfig = {}) {
     this.motionSequence += 1;
+    this.lastWrapperHampState = null;
     await this.connectWithRetry(motionConfig);
     const protocol = getNativeProtocol(motionConfig);
     if (protocol === "hamp" || protocol === "hrpp") {
@@ -1034,6 +1071,7 @@ export class HandyNativeController {
     if (options.cancelPending === true) {
       this.motionSequence += 1;
     }
+    this.lastWrapperHampState = null;
     const key = String(motionConfig.handyConnectionKey ?? "").trim();
     const trace = Boolean(motionConfig.handyNativeTrace);
     if (!key) return;

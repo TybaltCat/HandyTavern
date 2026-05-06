@@ -22,6 +22,7 @@ const DEFAULTS = {
   setupGuideOpen: false,
   holdUntilNextCommand: true,
   stopPreviousOnNewMotion: true,
+  smoothPatternTransitions: false,
   panelCollapsed: true,
   safeMode: true,
   safeMaxSpeed: 75,
@@ -549,6 +550,7 @@ async function syncConfig() {
     endpointSafetyPadding: Math.max(0, Math.min(20, clampPercent(settings.endpointSafetyPaddingPct))) / 100,
     safeMode: Boolean(settings.safeMode),
     safeMaxSpeed: clampPercent(settings.safeMaxSpeed) / 100,
+    smoothPatternTransitions: Boolean(settings.smoothPatternTransitions),
     strictMotionTag: Boolean(settings.strictTagOnly),
     holdUntilNextCommand: Boolean(settings.holdUntilNextCommand),
     stopPreviousOnNewMotion: Boolean(settings.stopPreviousOnNewMotion)
@@ -1299,13 +1301,12 @@ function nextPatternFrame(name, step) {
 
   if (name === "climax_window") {
     const cycle = [
-      ["hard", "full"],
-      ["intense", "deep"],
-      ["hard", "deep"],
-      ["brisk", "full"]
+      { style: "hard", depth: "full", slideMinPct: 14, slideMaxPct: 72 },
+      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 44 },
+      { style: "hard", depth: "deep", slideMinPct: 6, slideMaxPct: 38 },
+      { style: "brisk", depth: "full", slideMinPct: 20, slideMaxPct: 78 }
     ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
+    return cycle[step % cycle.length];
   }
 
   const styles = ["steady", "brisk", "hard"];
@@ -1704,6 +1705,12 @@ function renderSettingsPanel() {
       <label title="ON: cleaner command handoff, may feel slightly cut. OFF: smoother blending, but less predictable overlap.">
         <input type="checkbox" name="stopPreviousOnNewMotion" ${settings.stopPreviousOnNewMotion ? "checked" : ""} />
         Stop previous motion when a new message is sent
+      </label>
+    </div>
+    <div class="tavernplug-row" data-ui-mode="advanced">
+      <label title="Experimental. Adds a short processing buffer and smooth blend for live Handy updates. Default OFF so current behavior stays unchanged unless you test it.">
+        <input type="checkbox" name="smoothPatternTransitions" ${settings.smoothPatternTransitions ? "checked" : ""} />
+        Smooth live transitions (test)
       </label>
     </div>
     <div class="tavernplug-actions">

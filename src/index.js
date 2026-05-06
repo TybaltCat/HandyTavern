@@ -123,6 +123,8 @@ let motionConfig = {
   endpointSafetyPadding: Number(process.env.ENDPOINT_SAFETY_PADDING ?? 0.03),
   safeMode: String(process.env.SAFE_MODE ?? "true").toLowerCase() === "true",
   safeMaxSpeed: Number(process.env.SAFE_MAX_SPEED ?? 0.75),
+  smoothPatternTransitions:
+    String(process.env.SMOOTH_PATTERN_TRANSITIONS ?? "false").toLowerCase() === "true",
   holdUntilNextCommand:
     String(process.env.HOLD_UNTIL_NEXT_COMMAND ?? "false").toLowerCase() === "true",
   stopPreviousOnNewMotion:
@@ -248,6 +250,10 @@ function sanitizeMotionConfig(input) {
       input.safeMaxSpeed === undefined
         ? motionConfig.safeMaxSpeed
         : Number(input.safeMaxSpeed),
+    smoothPatternTransitions:
+      input.smoothPatternTransitions === undefined
+        ? motionConfig.smoothPatternTransitions
+        : parseBoolean(input.smoothPatternTransitions, motionConfig.smoothPatternTransitions),
     holdUntilNextCommand:
       input.holdUntilNextCommand === undefined
         ? motionConfig.holdUntilNextCommand
@@ -476,7 +482,8 @@ function startMotionRunner(runMotion, config) {
     await controller.runMotion(runMotion, config, {
       stopPreviousOnNewMotion: true,
       holdUntilNextCommand: true,
-      stopAtEnd: false
+      stopAtEnd: false,
+      smoothTransition: Boolean(config.smoothPatternTransitions)
     });
   };
 
@@ -659,13 +666,12 @@ function nextPatternFrame(name, step) {
 
   if (name === "climax_window") {
     const cycle = [
-      ["hard", "full"],
-      ["intense", "deep"],
-      ["hard", "deep"],
-      ["brisk", "full"]
+      { style: "hard", depth: "full", slideMinPct: 14, slideMaxPct: 72 },
+      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 44 },
+      { style: "hard", depth: "deep", slideMinPct: 6, slideMaxPct: 38 },
+      { style: "brisk", depth: "full", slideMinPct: 20, slideMaxPct: 78 }
     ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
+    return cycle[step % cycle.length];
   }
 
   const styles = ["steady", "brisk", "hard"];
@@ -712,7 +718,8 @@ async function runPatternFrame(trigger, step) {
   );
   await controller.runMotion(runMotion, motionConfig, {
     stopPreviousOnNewMotion: true,
-    holdUntilNextCommand: true
+    holdUntilNextCommand: true,
+    smoothTransition: Boolean(motionConfig.smoothPatternTransitions)
   });
 }
 
