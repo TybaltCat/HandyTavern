@@ -1,50 +1,21 @@
+import {
+  MODE_DEPTHS,
+  MODE_PATTERN_NAMES,
+  MODE_STYLE_INPUTS,
+  PATTERN_NAME_ALIASES,
+  normalizeCatalogStyleName
+} from "./modeCatalog.js";
+
 // Add/remove allowed style words for strict [motion: ...] tags here.
-const VALID_STYLES = new Set(["tease", "gentle", "steady", "brisk", "normal", "hard", "intense", "rough"]);
+const VALID_STYLES = new Set(MODE_STYLE_INPUTS);
 // Add/remove allowed depth words for strict tags here.
-const VALID_DEPTHS = new Set(["tip", "shallow", "middle", "full", "deep"]);
+const VALID_DEPTHS = new Set(MODE_DEPTHS);
 // Add/remove supported pattern names for temporary LLM pattern triggers here.
-const VALID_PATTERNS = new Set([
-  "wave",
-  "pulse",
-  "ramp",
-  "random",
-  "tease_hold",
-  "edging_ramp",
-  "edger",
-  "doubletap",
-  "pendulum",
-  "tremor",
-  "pulse_bursts",
-  "depth_ladder",
-  "stutter_break",
-  "climax_window"
-]);
-const PATTERN_NAME_ALIASES = {
-  tease: "tease_hold",
-  teasehold: "tease_hold",
-  teasing: "tease_hold",
-  edging: "edging_ramp",
-  edge: "edging_ramp",
-  edger: "edger",
-  double: "doubletap",
-  doubletap: "doubletap",
-  pendulum: "pendulum",
-  swing: "pendulum",
-  tremor: "tremor",
-  flutter: "tremor",
-  burst: "pulse_bursts",
-  bursts: "pulse_bursts",
-  ladder: "depth_ladder",
-  stutter: "stutter_break",
-  climax: "climax_window"
-};
+const VALID_PATTERNS = new Set(MODE_PATTERN_NAMES);
 const PATTERN_STOP_WORDS = new Set(["off", "stop", "none"]);
 
 function normalizeStyleName(raw) {
-  const value = String(raw ?? "").trim().toLowerCase();
-  if (value === "normal") return "steady";
-  if (value === "rough") return "hard";
-  return value;
+  return normalizeCatalogStyleName(raw);
 }
 
 function clamp01(value) {

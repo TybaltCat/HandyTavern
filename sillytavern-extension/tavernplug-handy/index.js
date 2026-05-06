@@ -60,6 +60,7 @@ const LOCKED_TECHNICAL_DEFAULTS = {
 };
 const LOCKED_CONTROLLER_MODE = "handy-native";
 const HEALTH_POLL_INTERVAL_MS = 30000;
+const USAGE_STATS_REFRESH_INTERVAL_MS = 15000;
 
 function applyLockedTechnicalSettings(target) {
   target.invertStroke = LOCKED_TECHNICAL_DEFAULTS.invertStroke;
@@ -161,6 +162,12 @@ let modeStateEl = null;
 let healthEl = null;
 let setupStateEl = null;
 let setupHintEl = null;
+let usageStatsOverviewEl = null;
+let usageStatsModesEl = null;
+let usageStatsPatternsEl = null;
+let usageStatsSourcesEl = null;
+let usageStatsUpdatedEl = null;
+let lastUsageStatsRefreshAt = 0;
 let panelRetryHandle = null;
 let testModeActive = false;
 let testModeStyle = "steady";
@@ -177,6 +184,13 @@ let lastObservedMessageChangedAt = 0;
 let lastNonCumMotionPayload = null;
 let cumOverrideActive = false;
 let cumRestorePayload = null;
+let modeCatalog = {
+  styles: [],
+  depths: [],
+  patternNames: [],
+  patternButtons: [],
+  patterns: {}
+};
 
 const MESSAGE_STABILIZE_MS = 1200;
 
@@ -512,6 +526,181 @@ async function fetchHealth() {
   return data;
 }
 
+async function fetchModeCatalog() {
+  const base = String(settings.bridgeUrl || DEFAULTS.bridgeUrl).replace(/\/$/, "");
+  const response = await fetch(`${base}/catalog`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data?.error || `Catalog failed (${response.status})`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function normalizeModeCatalog(input) {
+  const patterns = input?.patterns && typeof input.patterns === "object" ? input.patterns : {};
+  const patternNames = Array.isArray(input?.patternNames)
+    ? input.patternNames.filter((value) => typeof value === "string" && value.trim())
+    : Object.keys(patterns);
+  return {
+    styles: Array.isArray(input?.styles)
+      ? input.styles.filter((value) => typeof value === "string" && value.trim())
+      : [],
+    depths: Array.isArray(input?.depths)
+      ? input.depths.filter((value) => typeof value === "string" && value.trim())
+      : [],
+    patternNames,
+    patternButtons: Array.isArray(input?.patternButtons)
+      ? input.patternButtons.filter((entry) => entry && typeof entry === "object")
+      : [],
+    patterns
+  };
+}
+
+async function loadModeCatalog(force = false) {
+  if (!force && Array.isArray(modeCatalog.patternNames) && modeCatalog.patternNames.length) {
+    return modeCatalog;
+  }
+  const data = await fetchModeCatalog();
+  modeCatalog = normalizeModeCatalog(data?.catalog);
+  return modeCatalog;
+}
+
+function getCatalogStyles() {
+  return Array.isArray(modeCatalog.styles) ? modeCatalog.styles : [];
+}
+
+function getCatalogDepths() {
+  return Array.isArray(modeCatalog.depths) ? modeCatalog.depths : [];
+}
+
+function getCatalogPatternButtons() {
+  return Array.isArray(modeCatalog.patternButtons) ? modeCatalog.patternButtons : [];
+}
+
+function getCatalogPatternNames() {
+  return Array.isArray(modeCatalog.patternNames) ? modeCatalog.patternNames : [];
+}
+
+function getCatalogPatternDefinition(name) {
+  return modeCatalog?.patterns?.[name] ?? null;
+}
+
+function getCatalogPatternFrame(name, step) {
+  const definition = getCatalogPatternDefinition(name);
+  if (!definition) {
+    return { style: "steady", depth: "middle" };
+  }
+  if (definition.randomized) {
+    const styles = Array.isArray(definition.randomStyles) && definition.randomStyles.length
+      ? definition.randomStyles
+      : ["steady", "brisk", "hard"];
+    const depths = Array.isArray(definition.randomDepths) && definition.randomDepths.length
+      ? definition.randomDepths
+      : ["shallow", "middle", "full", "deep"];
+    return {
+      style: styles[Math.floor(Math.random() * styles.length)],
+      depth: depths[Math.floor(Math.random() * depths.length)]
+    };
+  }
+  const frames = Array.isArray(definition.frames) ? definition.frames : [];
+  if (!frames.length) {
+    return { style: "steady", depth: "middle" };
+  }
+  return frames[((Math.trunc(step) % frames.length) + frames.length) % frames.length];
+}
+
+function getCatalogPatternCycleSteps(name) {
+  const frames = Array.isArray(getCatalogPatternDefinition(name)?.frames)
+    ? getCatalogPatternDefinition(name).frames
+    : [];
+  return frames.length || 1;
+}
+
+function getCatalogPatternCycleTargetMs(name, baseCycleMs) {
+  const multiplier = Number(getCatalogPatternDefinition(name)?.cycleMsMultiplier);
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return Math.round(baseCycleMs);
+  return Math.round(baseCycleMs * multiplier);
+}
+
+function getCatalogPatternStepSpan(name, step) {
+  const spans = getCatalogPatternDefinition(name)?.stepSpans;
+  if (!Array.isArray(spans) || !spans.length) return 1;
+  const raw = Number(spans[((Math.trunc(step) % spans.length) + spans.length) % spans.length]);
+  if (!Number.isFinite(raw) || raw <= 0) return 1;
+  return Math.max(1, Math.round(raw));
+}
+
+async function fetchUsageStats() {
+  const base = String(settings.bridgeUrl || DEFAULTS.bridgeUrl).replace(/\/$/, "");
+  const response = await fetch(`${base}/stats`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = data?.error || `Stats failed (${response.status})`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function formatUsageEntries(entries, empty = "none") {
+  if (!Array.isArray(entries) || entries.length === 0) return empty;
+  return entries.map((entry) => `${entry.key} ${entry.count} (${entry.pct}%)`).join(", ");
+}
+
+function setUsageStatsUnavailable(message = "Usage: unavailable") {
+  if (usageStatsOverviewEl) usageStatsOverviewEl.textContent = message;
+  if (usageStatsModesEl) usageStatsModesEl.textContent = "Modes: unavailable";
+  if (usageStatsPatternsEl) usageStatsPatternsEl.textContent = "Patterns: unavailable";
+  if (usageStatsSourcesEl) usageStatsSourcesEl.textContent = "Sources: unavailable";
+  if (usageStatsUpdatedEl) usageStatsUpdatedEl.textContent = "Stats updated: unavailable";
+}
+
+function updateUsageStatsDisplay(data) {
+  const stats = data?.stats ?? {};
+  const summary = data?.summary ?? {};
+  if (usageStatsOverviewEl) {
+    usageStatsOverviewEl.textContent =
+      `Usage: motions ${stats.totalMotionCalls ?? 0} | pattern starts ${stats.totalPatternStarts ?? 0} | pattern frames ${stats.totalPatternFrames ?? 0}`;
+  }
+  if (usageStatsModesEl) {
+    usageStatsModesEl.textContent =
+      `Modes most: ${formatUsageEntries(summary?.modes?.top)} | least: ${formatUsageEntries(summary?.modes?.least)}`;
+  }
+  if (usageStatsPatternsEl) {
+    const unusedPatterns = Array.isArray(summary?.patternStarts?.unused) && summary.patternStarts.unused.length
+      ? ` | unused: ${summary.patternStarts.unused.slice(0, 4).join(", ")}${summary.patternStarts.unused.length > 4 ? "..." : ""}`
+      : "";
+    usageStatsPatternsEl.textContent =
+      `Pattern starts most: ${formatUsageEntries(summary?.patternStarts?.top)} | least: ${formatUsageEntries(summary?.patternStarts?.least)}${unusedPatterns}`;
+  }
+  if (usageStatsSourcesEl) {
+    usageStatsSourcesEl.textContent =
+      `Sources most: ${formatUsageEntries(summary?.sources?.top)} | least: ${formatUsageEntries(summary?.sources?.least)}`;
+  }
+  if (usageStatsUpdatedEl) {
+    const updatedAt = typeof stats?.updatedAt === "string" && stats.updatedAt
+      ? new Date(stats.updatedAt).toLocaleString()
+      : "never";
+    usageStatsUpdatedEl.textContent = `Stats updated: ${updatedAt}`;
+  }
+  lastUsageStatsRefreshAt = Date.now();
+}
+
+async function refreshUsageStats(force = false) {
+  if (!usageStatsOverviewEl) return false;
+  if (!force && Date.now() - lastUsageStatsRefreshAt < USAGE_STATS_REFRESH_INTERVAL_MS) {
+    return true;
+  }
+  try {
+    const data = await fetchUsageStats();
+    updateUsageStatsDisplay(data);
+    return true;
+  } catch (error) {
+    setUsageStatsUnavailable(`Usage: ${error.message}`);
+    return false;
+  }
+}
+
 function getAssistantMessageFromContext() {
   const context = getContextSafe();
   const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -558,6 +747,7 @@ async function syncConfig() {
 
   try {
     await postJson("/config", payload);
+    await loadModeCatalog(true).catch(() => {});
     healthFailureCount = 0;
     healthPollingPaused = false;
     bridgeHealthDetected = true;
@@ -568,6 +758,7 @@ async function syncConfig() {
       "Bridge is responding. Click Connect Device to pair with your Handy.",
       "warn"
     );
+    void refreshUsageStats(true);
     setStatus("Config synced");
     return true;
   } catch (error) {
@@ -590,11 +781,13 @@ async function handleSyncAndTestConnection() {
   if (!synced) return;
   try {
     const result = await postJson("/connect", {});
+    await loadModeCatalog(true).catch(() => {});
     const mode = result?.mode || settings.controllerMode;
     const connected = result?.controller?.connected ? "connected" : "disconnected";
     const device = result?.controller?.selectedDevice || "none";
     setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: idle`);
     setSyncButtonConnected(result?.controller?.connected);
+    void refreshUsageStats(true);
     if (result?.controller?.connected && hasConfiguredConnectionKey()) {
       setSetupState("Ready", `Connected to ${device}. Motion control is ready.`, "ok");
     } else {
@@ -627,6 +820,7 @@ function handleSetupGuide() {
 async function handleCheckBridge() {
   try {
     const health = await fetchHealth();
+    await loadModeCatalog(true).catch(() => {});
     bridgeHealthDetected = true;
     updateBridgeWarning();
     const connected = health?.controller?.connected ? "connected" : "disconnected";
@@ -635,6 +829,7 @@ async function handleCheckBridge() {
     const active = health?.motionLikelyActive ? "active" : "idle";
     setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}`);
     setSyncButtonConnected(Boolean(health?.controller?.connected));
+    void refreshUsageStats(true);
     if (health?.controller?.connected && hasConfiguredConnectionKey()) {
       setSetupState("Ready", `Bridge and device look good. Connected to ${device}.`, "ok");
     } else {
@@ -690,7 +885,7 @@ async function sendMotionIfNeeded(message) {
   if (settings.strictTagOnly && !messageHasMotionTag(message.text)) return;
 
   try {
-    const payload = { text: message.text };
+    const payload = { text: message.text, usageSource: "chat_auto" };
     await postJson("/motion", payload);
     lastSentMessageId = message.id;
     lastSentMessageSignature = signature;
@@ -952,7 +1147,7 @@ async function togglePause() {
   try {
     const resumeSpeed = currentStyleSpeed("steady");
     const resumeTag = `[motion: style=steady speed=${resumeSpeed} depth=middle duration=3s]`;
-    const payload = { text: resumeTag };
+    const payload = { text: resumeTag, usageSource: "resume_motion" };
     await postJson("/motion", payload);
     markNonCumMotionPayload(payload);
     setStatus(`Resumed: steady/middle @ ${resumeSpeed}`);
@@ -994,17 +1189,7 @@ async function handleRandomAction() {
     return;
   }
 
-  const randomPatterns = [
-    "wave",
-    "pulse",
-    "ramp",
-    "pendulum",
-    "edging_ramp",
-    "tremor",
-    "pulse_bursts",
-    "depth_ladder",
-    "tease_hold"
-  ];
+  const randomPatterns = getCatalogPatternNames().filter((name) => name !== "random");
   const randomModes = ["motion", "motion", "pattern"];
   const mode = pickRandom(randomModes);
 
@@ -1014,12 +1199,12 @@ async function handleRandomAction() {
       setStatus("Random action error: no pattern available");
       return;
     }
-    await startPatternMode(patternName);
+    await startPatternMode(patternName, "random_pattern");
     return;
   }
 
-  const styles = ["tease", "gentle", "steady", "brisk", "hard", "intense"];
-  const depths = ["tip", "shallow", "middle", "full", "deep"];
+  const styles = getCatalogStyles();
+  const depths = getCatalogDepths();
   const durations = [2.5, 3, 3.5, 4.2, 5];
   const style = pickRandom(styles) ?? "steady";
   const depth = pickRandom(depths) ?? "middle";
@@ -1027,7 +1212,7 @@ async function handleRandomAction() {
 
   try {
     stopPatternMode(false);
-    await sendModeTest(style, depth, {}, durationSec);
+    await sendModeTest(style, depth, { usageSource: "random_motion" }, durationSec);
     setStatus(`Random action: ${style}/${depth} for ${durationSec}s`);
   } catch (error) {
     setStatus(`Random action error: ${error.message}`);
@@ -1045,6 +1230,7 @@ async function handleCumAction() {
       || { text: `[motion: style=steady speed=${currentStyleSpeed("steady")} depth=middle duration=3s]` };
     try {
       stopPatternMode(false);
+      restore.usageSource = "cum_restore";
       await postJson("/motion", restore);
       markNonCumMotionPayload(restore);
       setStatus("Cum toggle: restored previous motion");
@@ -1064,7 +1250,7 @@ async function handleCumAction() {
   try {
     stopPatternMode(false);
     cumRestorePayload = cloneMotionPayload(lastNonCumMotionPayload);
-    await postJson("/motion", { text: tag, cumStrokePct });
+    await postJson("/motion", { text: tag, cumStrokePct, usageSource: "cum_action" });
     cumOverrideActive = true;
     setStatus(`Cum action sent: ${style}/${depth} (${cumStrokePct}%) @ ${speed}%`);
   } catch (error) {
@@ -1104,39 +1290,15 @@ function stopPatternMode(updateStatus = true) {
 }
 
 function patternCycleSteps(name) {
-  if (name === "wave") return 8;
-  if (name === "pulse") return 4;
-  if (name === "ramp") return 6;
-  if (name === "tease_hold") return 4;
-  if (name === "edging_ramp") return 6;
-  if (name === "edger") return 6;
-  if (name === "doubletap") return 7;
-  if (name === "pendulum") return 5;
-  if (name === "tremor") return 6;
-  if (name === "pulse_bursts") return 4;
-  if (name === "depth_ladder") return 5;
-  if (name === "stutter_break") return 5;
-  if (name === "climax_window") return 4;
-  return 6;
+  return getCatalogPatternCycleSteps(name);
 }
 
 function patternCycleTargetMs(name, baseCycleMs) {
-  if (name === "wave") return Math.round(baseCycleMs * 1.5);
-  if (name === "ramp") return Math.round(baseCycleMs * 1.35);
-  if (name === "pendulum") return Math.round(baseCycleMs * 1.4);
-  if (name === "doubletap") return Math.round(baseCycleMs * 0.9);
-  if (name === "tremor") return Math.round(baseCycleMs * 0.8);
-  return baseCycleMs;
+  return getCatalogPatternCycleTargetMs(name, baseCycleMs);
 }
 
 function patternStepSpan(name, step) {
-  if (name === "stutter_break") {
-    const phase = step % 4;
-    if (phase === 0) return 3;
-    if (phase === 1) return 2;
-    return 1;
-  }
-  return 1;
+  return getCatalogPatternStepSpan(name, step);
 }
 
 function patternStepDelayMs(baseIntervalMs) {
@@ -1146,178 +1308,10 @@ function patternStepDelayMs(baseIntervalMs) {
 }
 
 function nextPatternFrame(name, step) {
-  if (name === "wave") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "middle"],
-      ["hard", "full"],
-      ["intense", "deep"],
-      ["hard", "full"],
-      ["brisk", "middle"],
-      ["steady", "shallow"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "pulse") {
-    const cycle = [
-      { style: "steady", depth: "middle" },
-      { style: "steady", depth: "middle" },
-      { style: "hard", depth: "full" },
-      { style: "gentle", depth: "deep", speedPct: 20 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "ramp") {
-    const cycle = [
-      ["tease", "shallow"],
-      ["gentle", "middle"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["hard", "deep"],
-      ["intense", "deep"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "tease_hold") {
-    const cycle = [
-      { style: "tease", depth: "tip", slideMinPct: 80, slideMaxPct: 96 },
-      { style: "gentle", depth: "tip", slideMinPct: 82, slideMaxPct: 95 },
-      { style: "tease", depth: "shallow", slideMinPct: 76, slideMaxPct: 91 },
-      { style: "gentle", depth: "tip", slideMinPct: 84, slideMaxPct: 97 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "edging_ramp") {
-    const cycle = [
-      ["tease", "shallow"],
-      ["gentle", "middle"],
-      ["steady", "full"],
-      ["brisk", "full"],
-      ["hard", "deep"],
-      ["gentle", "middle"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "edger") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["hard", "full"],
-      ["gentle", "shallow"],
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
-    ];
-    const frame = cycle[step % cycle.length];
-    if (Array.isArray(frame)) {
-      const [style, depth] = frame;
-      return { style, depth };
-    }
-    return frame;
-  }
-
-  if (name === "doubletap") {
-    const cycle = [
-      ["steady", "middle"],
-      { style: "hard", depth: "full", durationMultiplier: 0.6 },
-      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
-      ["gentle", "middle"],
-      ["steady", "middle"],
-      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
-      ["gentle", "shallow"]
-    ];
-    const frame = cycle[step % cycle.length];
-    if (Array.isArray(frame)) {
-      const [style, depth] = frame;
-      return { style, depth };
-    }
-    return frame;
-  }
-
-  if (name === "pendulum") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["steady", "middle"],
-      ["gentle", "shallow"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "tremor") {
-    const cycle = [
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
-      { style: "brisk", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
-      { style: "hard", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
-      { style: "gentle", depth: "shallow", slideMinPct: 78, slideMaxPct: 88 },
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "pulse_bursts") {
-    const cycle = [
-      ["hard", "full"],
-      ["intense", "deep"],
-      ["gentle", "middle"],
-      ["steady", "middle"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "depth_ladder") {
-    const cycle = [
-      { style: "steady", depth: "deep", slideMinPct: 0, slideMaxPct: 22 },
-      { style: "steady", depth: "full", slideMinPct: 22, slideMaxPct: 42 },
-      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 58 },
-      { style: "hard", depth: "shallow", slideMinPct: 58, slideMaxPct: 74 },
-      { style: "steady", depth: "tip", slideMinPct: 74, slideMaxPct: 90 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "stutter_break") {
-    const cycle = [
-      { style: "hard", depth: "full" },
-      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
-      { style: "hard", depth: "deep" },
-      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
-      { style: "gentle", depth: "middle", durationMultiplier: 0.5 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "climax_window") {
-    const cycle = [
-      { style: "hard", depth: "full", slideMinPct: 14, slideMaxPct: 72 },
-      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 44 },
-      { style: "hard", depth: "deep", slideMinPct: 6, slideMaxPct: 38 },
-      { style: "brisk", depth: "full", slideMinPct: 20, slideMaxPct: 78 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  const styles = ["steady", "brisk", "hard"];
-  const depths = ["shallow", "middle", "full", "deep"];
-  return {
-    style: styles[Math.floor(Math.random() * styles.length)],
-    depth: depths[Math.floor(Math.random() * depths.length)]
-  };
+  return getCatalogPatternFrame(name, step);
 }
 
-async function startPatternMode(name) {
+async function startPatternMode(name, usageSource = "manual_pattern") {
   if (settings.paused) {
     setStatus("Paused: pattern blocked");
     return;
@@ -1333,7 +1327,7 @@ async function startPatternMode(name) {
 
   const tick = async (durationSecOverride = null) => {
     const frame = nextPatternFrame(name, patternStep);
-    await sendModeTest(frame.style, frame.depth, frame, durationSecOverride);
+    await sendModeTest(frame.style, frame.depth, { ...frame, usageSource }, durationSecOverride);
   };
 
   const baseCycleMs = Math.max(
@@ -1452,7 +1446,10 @@ async function sendModeTest(style, depth, options = {}, durationSecOverride = nu
   const formattedDuration = String(durationSec).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
   const testTag = `[motion: style=${style} speed=${speed} depth=${depth} duration=${formattedDuration}s]`;
   try {
-    const payload = { text: testTag };
+    const payload = {
+      text: testTag,
+      usageSource: String(options.usageSource ?? "manual_test")
+    };
     const rawSlideMinPct = Number(options.slideMinPct);
     const rawSlideMaxPct = Number(options.slideMaxPct);
     if (Number.isFinite(rawSlideMinPct) && Number.isFinite(rawSlideMaxPct)) {
@@ -1746,6 +1743,18 @@ function renderSettingsPanel() {
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-full">Full</button>
       <button class="menu_button" type="button" id="${EXTENSION_NAME}-depth-deep">Deep</button>
     </div>
+    <div class="tavernplug-row" data-ui-mode="advanced">
+      <label>Usage Stats</label>
+      <div class="tavernplug-actions">
+        <button class="menu_button" type="button" id="${EXTENSION_NAME}-stats-refresh">Refresh Stats</button>
+        <button class="menu_button" type="button" id="${EXTENSION_NAME}-stats-reset">Reset Stats</button>
+      </div>
+      <div class="tavernplug-status" id="${EXTENSION_NAME}-stats-overview">Usage: unknown</div>
+      <div class="tavernplug-status" id="${EXTENSION_NAME}-stats-modes">Modes: unknown</div>
+      <div class="tavernplug-status" id="${EXTENSION_NAME}-stats-patterns">Patterns: unknown</div>
+      <div class="tavernplug-status" id="${EXTENSION_NAME}-stats-sources">Sources: unknown</div>
+      <div class="tavernplug-status" id="${EXTENSION_NAME}-stats-updated">Stats updated: unknown</div>
+    </div>
     <div class="tavernplug-actions">
       <button class="menu_button tavernplug-hold-on-btn" type="button" id="${EXTENSION_NAME}-hold-toggle" title="Hold ON keeps the current motion running until a new command replaces it. Hold OFF lets motions end on their own after their duration.">Hold ON</button>
       <button class="menu_button tavernplug-strict-on-btn" type="button" id="${EXTENSION_NAME}-strict-toggle" title="Strict ON only accepts valid [motion: ...] tags. Strict OFF lets HandyTavern guess motion from normal prose.">Strict ON</button>
@@ -1793,25 +1802,9 @@ function renderSettingsPanel() {
     });
   });
 
-  const patternButtons = [
-    ["wave", "wave"],
-    ["pulse", "pulse"],
-    ["ramp", "ramp"],
-    ["random", "random"],
-    ["tease", "tease_hold"],
-    ["edging", "edging_ramp"],
-    ["edger", "edger"],
-    ["doubletap", "doubletap"],
-    ["pendulum", "pendulum"],
-    ["tremor", "tremor"],
-    ["burst", "pulse_bursts"],
-    ["ladder", "depth_ladder"],
-    ["stutter", "stutter_break"],
-    ["climax", "climax_window"]
-  ];
-  patternButtons.forEach(([buttonSuffix, patternName]) => {
+  getCatalogPatternButtons().forEach(({ buttonSuffix, pattern }) => {
     bindClick(`pattern-${buttonSuffix}`, () => {
-      void startPatternMode(patternName);
+      void startPatternMode(pattern, "manual_pattern");
     });
   });
   bindClick("pattern-stop", () => {
@@ -1830,6 +1823,18 @@ function renderSettingsPanel() {
   bindClick("strict-toggle", () => { toggleStrictMode(!settings.strictTagOnly); });
   bindClick("stop", () => { void handleEmergencyStop(); });
   bindClick("park-hold", () => { void handleParkHold(); });
+  bindClick("stats-refresh", () => { void refreshUsageStats(true); });
+  bindClick("stats-reset", async () => {
+    const confirmed = window.confirm("Reset all usage stats counters?");
+    if (!confirmed) return;
+    try {
+      const data = await postJson("/stats/reset", {});
+      updateUsageStatsDisplay(data);
+      setStatus("Usage stats reset");
+    } catch (error) {
+      setStatus(`Stats reset error: ${error.message}`);
+    }
+  });
 
   bindClassClick(".tavernplug-advanced-toggle", () => {
     setAdvancedOpen(panel, !settings.advancedOpen);
@@ -1867,6 +1872,11 @@ function renderSettingsPanel() {
   modeStateEl = panel.querySelector(`#${EXTENSION_NAME}-modes`);
   healthEl = panel.querySelector(`#${EXTENSION_NAME}-health`);
   statusEl = panel.querySelector(`#${EXTENSION_NAME}-status`);
+  usageStatsOverviewEl = panel.querySelector(`#${EXTENSION_NAME}-stats-overview`);
+  usageStatsModesEl = panel.querySelector(`#${EXTENSION_NAME}-stats-modes`);
+  usageStatsPatternsEl = panel.querySelector(`#${EXTENSION_NAME}-stats-patterns`);
+  usageStatsSourcesEl = panel.querySelector(`#${EXTENSION_NAME}-stats-sources`);
+  usageStatsUpdatedEl = panel.querySelector(`#${EXTENSION_NAME}-stats-updated`);
   setSetupGuideOpen(panel, settings.setupGuideOpen);
   updateUiModeControls(panel);
   updateBridgeWarning(panel);
@@ -1883,6 +1893,7 @@ function renderSettingsPanel() {
   updateSafeButtons();
   applyDebugVisibility();
   updateQuickPauseButton();
+  void refreshUsageStats(true);
 }
 
 function ensurePanelMounted() {
@@ -2016,6 +2027,7 @@ function startHealthPolling() {
   const run = async () => {
     try {
       const health = await fetchHealth();
+      await loadModeCatalog().catch(() => {});
       bridgeHealthDetected = true;
       updateBridgeWarning();
       healthFailureCount = 0;
@@ -2032,6 +2044,7 @@ function startHealthPolling() {
         ? " | Depth: limited (HAMP mode)"
         : "";
       setHealth(`Bridge: ${connected} | Mode: ${mode} | Device: ${device} | Motion: ${active}${hspBits}${depthBits}`);
+      void refreshUsageStats();
       setSyncButtonConnected(Boolean(health?.controller?.connected));
       if (health?.controller?.connected && hasConfiguredConnectionKey()) {
         setSetupState("Ready", `Connected to ${device}. Motion control is ready.`, "ok");

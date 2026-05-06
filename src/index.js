@@ -10,6 +10,16 @@ import {
 } from "./motionParser.js";
 import { HandyController } from "./handyController.js";
 import { HandyNativeController } from "./handyNativeController.js";
+import {
+  buildModeCatalogSnapshot,
+  getPatternCycleTargetMs,
+  getPatternFrame,
+  getPatternStepSpan,
+  MODE_DEPTHS,
+  MODE_PATTERN_NAMES,
+  MODE_STYLES,
+  normalizeCatalogStyleName
+} from "./modeCatalog.js";
 
 const app = express();
 // Allow local browser calls from SillyTavern UI to this local bridge.
@@ -60,6 +70,13 @@ const PARK_ON_START =
 const CONFIG_FILE_PATH =
   process.env.CONFIG_PATH
   || path.resolve(process.cwd(), "tavernplug.config.json");
+const STATS_FILE_PATH =
+  process.env.STATS_PATH
+  || path.resolve(process.cwd(), "tavernplug.stats.json");
+const TRACKED_STYLES = MODE_STYLES;
+const TRACKED_DEPTHS = MODE_DEPTHS;
+const TRACKED_PATTERNS = MODE_PATTERN_NAMES;
+const TRACKED_MODE_KEYS = TRACKED_STYLES.flatMap((style) => TRACKED_DEPTHS.map((depth) => `${style}/${depth}`));
 
 let ready = false;
 const patternState = {
@@ -76,6 +93,7 @@ let lastMotionCommandAt = 0;
 let motionLikelyActive = false;
 let deadmanEngaged = false;
 let startupParkPromise = null;
+let usageStatsPersistHandle = null;
 // Runtime-tunable values exposed via POST /config.
 let motionConfig = {
   controllerMode:
@@ -132,8 +150,219 @@ let motionConfig = {
   strictMotionTag: strictMotionTagRuntime
 };
 
+function createCounter(keys = []) {
+  const counter = {};
+  for (const key of keys) {
+    counter[key] = 0;
+  }
+  return counter;
+}
+
+function createEmptyUsageStats() {
+  return {
+    schemaVersion: 1,
+    sessionStartedAt: new Date().toISOString(),
+    updatedAt: null,
+    totalMotionCalls: 0,
+    totalPatternStarts: 0,
+    totalPatternFrames: 0,
+    styleCalls: createCounter(TRACKED_STYLES),
+    depthCalls: createCounter(TRACKED_DEPTHS),
+    modeCalls: createCounter(TRACKED_MODE_KEYS),
+    patternStarts: createCounter(TRACKED_PATTERNS),
+    patternFrameCalls: createCounter(TRACKED_PATTERNS),
+    sourceCalls: {}
+  };
+}
+
+let usageStats = createEmptyUsageStats();
+
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
+}
+
+function normalizeStyleName(raw) {
+  return normalizeCatalogStyleName(raw);
+}
+
+function normalizeDepthName(raw) {
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+function normalizePatternName(raw) {
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+function normalizeUsageSource(raw, fallback = "unknown") {
+  const normalized = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9:_-]+/g, "_");
+  return normalized || fallback;
+}
+
+function buildModeKey(style, depth) {
+  return `${style}/${depth}`;
+}
+
+function incrementCounter(counter, key, amount = 1) {
+  if (!key) return;
+  counter[key] = (Number(counter[key]) || 0) + amount;
+}
+
+function mergeCounter(target, source, allowedKeys = null) {
+  if (!source || typeof source !== "object") return;
+  const allowed = allowedKeys ? new Set(allowedKeys) : null;
+  for (const [key, value] of Object.entries(source)) {
+    if (allowed && !allowed.has(key)) continue;
+    const count = Number(value);
+    if (!Number.isFinite(count) || count < 0) continue;
+    target[key] = Math.round(count);
+  }
+}
+
+function sanitizeUsageStats(input) {
+  const next = createEmptyUsageStats();
+  if (!input || typeof input !== "object") return next;
+  if (typeof input.sessionStartedAt === "string" && input.sessionStartedAt.trim()) {
+    next.sessionStartedAt = input.sessionStartedAt;
+  }
+  if (typeof input.updatedAt === "string" && input.updatedAt.trim()) {
+    next.updatedAt = input.updatedAt;
+  }
+  next.totalMotionCalls = Math.max(0, Math.round(Number(input.totalMotionCalls) || 0));
+  next.totalPatternStarts = Math.max(0, Math.round(Number(input.totalPatternStarts) || 0));
+  next.totalPatternFrames = Math.max(0, Math.round(Number(input.totalPatternFrames) || 0));
+  mergeCounter(next.styleCalls, input.styleCalls, TRACKED_STYLES);
+  mergeCounter(next.depthCalls, input.depthCalls, TRACKED_DEPTHS);
+  mergeCounter(next.modeCalls, input.modeCalls, TRACKED_MODE_KEYS);
+  mergeCounter(next.patternStarts, input.patternStarts, TRACKED_PATTERNS);
+  mergeCounter(next.patternFrameCalls, input.patternFrameCalls, TRACKED_PATTERNS);
+  mergeCounter(next.sourceCalls, input.sourceCalls);
+  return next;
+}
+
+async function loadUsageStats() {
+  try {
+    const raw = await fs.readFile(STATS_FILE_PATH, "utf8");
+    usageStats = sanitizeUsageStats(JSON.parse(raw));
+    // eslint-disable-next-line no-console
+    console.log(`[stats] loaded usage stats from ${STATS_FILE_PATH}`);
+  } catch (error) {
+    if (error && error.code === "ENOENT") return;
+    // eslint-disable-next-line no-console
+    console.warn("[stats] failed to load usage stats:", error);
+  }
+}
+
+async function persistUsageStats() {
+  try {
+    await fs.writeFile(
+      STATS_FILE_PATH,
+      `${JSON.stringify(usageStats, null, 2)}\n`,
+      "utf8"
+    );
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn("[stats] failed to persist usage stats:", error);
+  }
+}
+
+function schedulePersistUsageStats() {
+  if (usageStatsPersistHandle) return;
+  usageStatsPersistHandle = setTimeout(() => {
+    usageStatsPersistHandle = null;
+    void persistUsageStats();
+  }, 750);
+}
+
+function touchUsageStats() {
+  usageStats.updatedAt = new Date().toISOString();
+  schedulePersistUsageStats();
+}
+
+function trackMotionUsage(motion, rawSource = "api_motion") {
+  const style = normalizeStyleName(motion?.style);
+  const depth = normalizeDepthName(motion?.depth);
+  const source = normalizeUsageSource(rawSource, "api_motion");
+  usageStats.totalMotionCalls += 1;
+  if (TRACKED_STYLES.includes(style)) {
+    incrementCounter(usageStats.styleCalls, style);
+  }
+  if (TRACKED_DEPTHS.includes(depth)) {
+    incrementCounter(usageStats.depthCalls, depth);
+  }
+  if (TRACKED_STYLES.includes(style) && TRACKED_DEPTHS.includes(depth)) {
+    incrementCounter(usageStats.modeCalls, buildModeKey(style, depth));
+  }
+  incrementCounter(usageStats.sourceCalls, source);
+  touchUsageStats();
+}
+
+function trackPatternStart(patternTrigger, rawSource = "chat_pattern") {
+  const pattern = normalizePatternName(patternTrigger?.pattern);
+  const source = normalizeUsageSource(rawSource, "chat_pattern");
+  usageStats.totalPatternStarts += 1;
+  if (TRACKED_PATTERNS.includes(pattern)) {
+    incrementCounter(usageStats.patternStarts, pattern);
+  }
+  incrementCounter(usageStats.sourceCalls, source);
+  touchUsageStats();
+}
+
+function trackPatternFrameUsage(patternName, motion) {
+  const pattern = normalizePatternName(patternName);
+  const style = normalizeStyleName(motion?.style);
+  const depth = normalizeDepthName(motion?.depth);
+  usageStats.totalPatternFrames += 1;
+  if (TRACKED_PATTERNS.includes(pattern)) {
+    incrementCounter(usageStats.patternFrameCalls, pattern);
+  }
+  if (TRACKED_STYLES.includes(style)) {
+    incrementCounter(usageStats.styleCalls, style);
+  }
+  if (TRACKED_DEPTHS.includes(depth)) {
+    incrementCounter(usageStats.depthCalls, depth);
+  }
+  if (TRACKED_STYLES.includes(style) && TRACKED_DEPTHS.includes(depth)) {
+    incrementCounter(usageStats.modeCalls, buildModeKey(style, depth));
+  }
+  touchUsageStats();
+}
+
+function summarizeCounter(counter, knownKeys = null, limit = 3) {
+  const keys = knownKeys ?? Object.keys(counter ?? {});
+  const entries = keys.map((key) => ({
+    key,
+    count: Math.max(0, Math.round(Number(counter?.[key]) || 0))
+  }));
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0);
+  const used = entries
+    .filter((entry) => entry.count > 0)
+    .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+  const leastUsed = [...used]
+    .sort((a, b) => a.count - b.count || a.key.localeCompare(b.key));
+  const withPct = (entry) => ({
+    ...entry,
+    pct: total > 0 ? Number(((entry.count / total) * 100).toFixed(1)) : 0
+  });
+  return {
+    total,
+    top: used.slice(0, limit).map(withPct),
+    least: leastUsed.slice(0, limit).map(withPct),
+    unused: entries.filter((entry) => entry.count === 0).map((entry) => entry.key)
+  };
+}
+
+function buildUsageStatsSummary(stats = usageStats) {
+  return {
+    modes: summarizeCounter(stats.modeCalls, TRACKED_MODE_KEYS),
+    styles: summarizeCounter(stats.styleCalls, TRACKED_STYLES),
+    depths: summarizeCounter(stats.depthCalls, TRACKED_DEPTHS),
+    patternStarts: summarizeCounter(stats.patternStarts, TRACKED_PATTERNS),
+    patternFrames: summarizeCounter(stats.patternFrameCalls, TRACKED_PATTERNS),
+    sources: summarizeCounter(stats.sourceCalls)
+  };
 }
 
 function parseBoolean(value, fallback) {
@@ -510,176 +739,7 @@ function logMotionDebug(text) {
 }
 
 function nextPatternFrame(name, step) {
-  if (name === "wave") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "middle"],
-      ["hard", "full"],
-      ["intense", "deep"],
-      ["hard", "full"],
-      ["brisk", "middle"],
-      ["steady", "shallow"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "pulse") {
-    const cycle = [
-      { style: "steady", depth: "middle" },
-      { style: "steady", depth: "middle" },
-      { style: "hard", depth: "full" },
-      { style: "gentle", depth: "deep", speedPct: 20 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "ramp") {
-    const cycle = [
-      ["tease", "shallow"],
-      ["gentle", "middle"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["hard", "deep"],
-      ["intense", "deep"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "tease_hold") {
-    const cycle = [
-      { style: "tease", depth: "tip", slideMinPct: 88, slideMaxPct: 97, durationMultiplier: 0.7 },
-      { style: "gentle", depth: "shallow", slideMinPct: 74, slideMaxPct: 89, durationMultiplier: 0.95 },
-      { style: "steady", depth: "middle", slideMinPct: 50, slideMaxPct: 72, durationMultiplier: 0.75 },
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 98, durationMultiplier: 0.55 },
-      { style: "gentle", depth: "shallow", slideMinPct: 68, slideMaxPct: 85, durationMultiplier: 0.9 },
-      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 66, durationMultiplier: 0.6 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "edging_ramp") {
-    const cycle = [
-      ["tease", "shallow"],
-      ["gentle", "middle"],
-      ["steady", "full"],
-      ["brisk", "full"],
-      ["hard", "deep"],
-      ["gentle", "middle"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "edger") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["hard", "full"],
-      ["gentle", "shallow"],
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
-    ];
-    const frame = cycle[step % cycle.length];
-    if (Array.isArray(frame)) {
-      const [style, depth] = frame;
-      return { style, depth };
-    }
-    return frame;
-  }
-
-  if (name === "doubletap") {
-    const cycle = [
-      ["steady", "middle"],
-      { style: "hard", depth: "full", durationMultiplier: 0.6 },
-      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
-      ["gentle", "middle"],
-      ["steady", "middle"],
-      { style: "hard", depth: "deep", durationMultiplier: 0.6 },
-      ["gentle", "shallow"]
-    ];
-    const frame = cycle[step % cycle.length];
-    if (Array.isArray(frame)) {
-      const [style, depth] = frame;
-      return { style, depth };
-    }
-    return frame;
-  }
-
-  if (name === "pendulum") {
-    const cycle = [
-      ["gentle", "shallow"],
-      ["steady", "middle"],
-      ["brisk", "full"],
-      ["steady", "middle"],
-      ["gentle", "shallow"]
-    ];
-    const [style, depth] = cycle[step % cycle.length];
-    return { style, depth };
-  }
-
-  if (name === "tremor") {
-    const cycle = [
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
-      { style: "brisk", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 },
-      { style: "hard", depth: "shallow", slideMinPct: 78, slideMaxPct: 88, durationMultiplier: 0.75 },
-      { style: "gentle", depth: "shallow", slideMinPct: 78, slideMaxPct: 88 },
-      { style: "tease", depth: "tip", slideMinPct: 90, slideMaxPct: 96 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "pulse_bursts") {
-    const cycle = [
-      { style: "hard", depth: "full", slideMinPct: 12, slideMaxPct: 46, durationMultiplier: 0.55 },
-      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 24, durationMultiplier: 0.45 },
-      { style: "gentle", depth: "middle", slideMinPct: 38, slideMaxPct: 64, durationMultiplier: 0.8 },
-      { style: "steady", depth: "shallow", slideMinPct: 64, slideMaxPct: 84, durationMultiplier: 0.7 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "depth_ladder") {
-    const cycle = [
-      { style: "steady", depth: "deep", slideMinPct: 0, slideMaxPct: 22 },
-      { style: "steady", depth: "full", slideMinPct: 22, slideMaxPct: 42 },
-      { style: "brisk", depth: "middle", slideMinPct: 42, slideMaxPct: 58 },
-      { style: "hard", depth: "shallow", slideMinPct: 58, slideMaxPct: 74 },
-      { style: "steady", depth: "tip", slideMinPct: 74, slideMaxPct: 90 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "stutter_break") {
-    const cycle = [
-      { style: "hard", depth: "full" },
-      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
-      { style: "hard", depth: "deep" },
-      { style: "hard", depth: "deep", slideMinPct: 0, slideMaxPct: 16 },
-      { style: "gentle", depth: "middle", durationMultiplier: 0.5 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  if (name === "climax_window") {
-    const cycle = [
-      { style: "hard", depth: "full", slideMinPct: 14, slideMaxPct: 72 },
-      { style: "intense", depth: "deep", slideMinPct: 0, slideMaxPct: 44 },
-      { style: "hard", depth: "deep", slideMinPct: 6, slideMaxPct: 38 },
-      { style: "brisk", depth: "full", slideMinPct: 20, slideMaxPct: 78 }
-    ];
-    return cycle[step % cycle.length];
-  }
-
-  const styles = ["steady", "brisk", "hard"];
-  const depths = ["shallow", "middle", "full", "deep"];
-  return {
-    style: styles[Math.floor(Math.random() * styles.length)],
-    depth: depths[Math.floor(Math.random() * depths.length)]
-  };
+  return getPatternFrame(name, step);
 }
 
 function stopPatternRunner() {
@@ -701,11 +761,14 @@ function stopPatternRunner() {
 async function runPatternFrame(trigger, step) {
   const controller = getActiveController(motionConfig);
   const frame = nextPatternFrame(trigger.pattern, step);
+  const overrideSpeedPct = Number(frame.speedPct);
   const rawMotion = {
     ...frame,
     style: frame.style,
     depth: frame.depth,
-    speed: trigger.speed,
+    speed: Number.isFinite(overrideSpeedPct)
+      ? Math.max(0, Math.min(100, overrideSpeedPct)) / 100
+      : trigger.speed,
     durationMs: Math.max(
       300,
       Math.round(trigger.intervalMs * 0.95 * Math.max(0.25, Number(frame.durationMultiplier) || 1))
@@ -721,6 +784,7 @@ async function runPatternFrame(trigger, step) {
     holdUntilNextCommand: true,
     smoothTransition: Boolean(motionConfig.smoothPatternTransitions)
   });
+  trackPatternFrameUsage(trigger.pattern, runMotion);
 }
 
 async function startPatternRunner(trigger, options = {}) {
@@ -829,6 +893,31 @@ app.get("/config", (_req, res) => {
   res.json({ ok: true, config: { ...motionConfig, strictMotionTag: strictMotionTagRuntime } });
 });
 
+app.get("/catalog", (_req, res) => {
+  res.json({
+    ok: true,
+    catalog: buildModeCatalogSnapshot()
+  });
+});
+
+app.get("/stats", (_req, res) => {
+  res.json({
+    ok: true,
+    stats: usageStats,
+    summary: buildUsageStatsSummary()
+  });
+});
+
+app.post("/stats/reset", async (_req, res) => {
+  usageStats = createEmptyUsageStats();
+  await persistUsageStats();
+  return res.json({
+    ok: true,
+    stats: usageStats,
+    summary: buildUsageStatsSummary()
+  });
+});
+
 app.post("/config", (req, res) => {
   try {
     // Central place where extension UI values are validated before use.
@@ -929,6 +1018,7 @@ app.post("/park-hold", async (_req, res) => {
 
 app.post("/motion", async (req, res) => {
   const text = String(req.body?.text ?? "");
+  const usageSource = normalizeUsageSource(req.body?.usageSource, "api_motion");
   if (!text.trim()) {
     return res.status(400).json({ error: "Missing text" });
   }
@@ -983,17 +1073,22 @@ app.post("/motion", async (req, res) => {
     }
 
     try {
+      const trackedPatternTrigger = {
+        ...patternTrigger,
+        usageSource
+      };
       await ensureReady();
       if (enabled) {
         // eslint-disable-next-line no-console
         console.log(
           `[pattern] start name=${patternTrigger.pattern} auto=${Boolean(patternTrigger.auto)} speed=${patternTrigger.speed.toFixed(3)} intervalMs=${patternTrigger.intervalMs} durationMs=${patternTrigger.durationMs}`
         );
-        await startPatternRunner(patternTrigger, {
+        await startPatternRunner(trackedPatternTrigger, {
           repeatWindows: !Boolean(patternTrigger.auto)
         });
         markMotionCommand();
       }
+      trackPatternStart(patternTrigger, usageSource);
       return res.json({
         accepted: true,
         simulated: !enabled,
@@ -1053,6 +1148,7 @@ app.post("/motion", async (req, res) => {
       startMotionRunner(runMotion, motionConfig);
       markMotionCommand();
     }
+    trackMotionUsage(runMotion, usageSource);
 
     return res.json({
       accepted: true,
@@ -1194,6 +1290,7 @@ app.post("/preview-motion", (req, res) => {
 });
 
 await loadPersistedMotionConfig();
+await loadUsageStats();
 
 const server = app.listen(port, () => {
   // eslint-disable-next-line no-console
@@ -1290,6 +1387,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
       try {
         await ensureReady();
         await startPatternRunner(patternTrigger);
+        trackPatternStart(patternTrigger, "stdin_pattern");
       } catch (error) {
         // eslint-disable-next-line no-console
         console.error("pattern error:", error);
@@ -1321,6 +1419,7 @@ if (String(process.env.STDIN_MODE ?? "false").toLowerCase() === "true") {
       cancelMotionRunner();
       const runMotion = applySafeModeToMotion(motion, motionConfig);
       startMotionRunner(runMotion, motionConfig);
+      trackMotionUsage(runMotion, "stdin_motion");
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error("device error:", error);
